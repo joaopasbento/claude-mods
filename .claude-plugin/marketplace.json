@@ -1,0 +1,16 @@
+{
+  "name": "claude-mods",
+  "owner": {
+    "name": "joaopasbento"
+  },
+  "metadata": {
+    "description": "Claude Code mods by joaopasbento."
+  },
+  "plugins": [
+    {
+      "name": "token-weather",
+      "source": "./token-weather",
+      "description": "A live forecast of the context window, drawn above the prompt."
+    }
+  ]
+}
