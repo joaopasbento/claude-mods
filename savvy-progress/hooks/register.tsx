@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { ElementTable, EngineInterface, Register, RenderElement } from 'claude-code'
 
 import type { AgentRun, Flow, Panel, Phase, PlannedTask } from '../types'
 
@@ -37,7 +37,6 @@ type Lang = 'en' | 'ru'
 const STRINGS = {
   en: {
     pane: 'Agents',
-    cost: 'Cost',
     tokens: 'Tokens',
     time: 'Time',
     collapse: 'Collapse',
@@ -65,7 +64,6 @@ const STRINGS = {
   },
   ru: {
     pane: 'Агенты',
-    cost: 'Стоимость',
     tokens: 'Токены',
     time: 'Время',
     collapse: 'Свернуть',
@@ -294,37 +292,6 @@ const TIER_MODEL: Record<string, string> = {
   light: 'Opus · low',
 }
 
-// USD per million tokens: input, output, cache read, cache write (5-minute TTL).
-// The engine reports tokens, not money, so the panel's cost is an estimate.
-const PRICES: [RegExp, [number, number, number, number]][] = [
-  [/fable|mythos/, [10, 50, 0.25, 12.5]],
-  [/opus-5-5/, [4, 20, 0.2, 5]],
-  [/opus/, [5, 25, 0.5, 6.25]],
-  [/sonnet/, [2, 10, 0.2, 2.5]],
-  [/haiku/, [1, 5, 0.1, 1.25]],
-]
-
-type Usage = {
-  input_tokens: number
-  output_tokens: number
-  cache_read_input_tokens: number
-  cache_creation_input_tokens: number
-}
-
-const priceOf = (model: string): [number, number, number, number] =>
-  PRICES.find(([re]) => re.test(model.toLowerCase()))?.[1] ?? [4, 20, 0.2, 5]
-
-const costOf = (model: string, u: Usage): number => {
-  const [i, o, r, w] = priceOf(model)
-  return (
-    ((u.input_tokens || 0) * i +
-      (u.output_tokens || 0) * o +
-      (u.cache_read_input_tokens || 0) * r +
-      (u.cache_creation_input_tokens || 0) * w) /
-    1e6
-  )
-}
-
 const windowOf = (model: string): number => (/haiku/i.test(model) ? 200_000 : 1_000_000)
 
 // `savvy-careful`, or `savvy-flow:savvy-careful` when the agents ship in a plugin.
@@ -346,8 +313,6 @@ const norm = (s: string): string => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, 
 const fmtTokens = (n: number): string =>
   n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${Math.round(n)}`
 
-const fmtCost = (usd: number): string => `$${usd < 10 ? usd.toFixed(2) : usd.toFixed(1)}`
-
 const fmtTime = (ms: number): string => {
   const s = Math.max(0, Math.round(ms / 1000))
   const h = Math.floor(s / 3600)
@@ -367,11 +332,10 @@ const plannedOf = (f: Flow | null, list: AgentRun[]): Planned[] => {
 }
 
 const totals = (list: AgentRun[], at: number) => {
-  const cost = list.reduce((s, a) => s + a.costUsd, 0)
   const tokens = list.reduce((s, a) => s + a.tokens, 0)
   const start = Math.min(...list.map(a => a.startedAt))
   const end = Math.max(...list.map(a => a.endedAt ?? Math.max(at, a.startedAt)))
-  return { cost, tokens, time: list.length ? end - start : 0 }
+  return { tokens, time: list.length ? end - start : 0 }
 }
 
 // --- desktop drawings: each row is one SVG, as the band above the prompt is.
@@ -518,7 +482,7 @@ const svg = (W: number, H: number, body: string): string =>
 const headerSvg = (W: number, title: string, t: ReturnType<typeof totals>): string => {
   const s = tr()
   const gap = 6
-  const tw = (W - gap * 2) / 3
+  const tw = (W - gap) / 2
   const top = title ? 28 : 0
   const tile = (i: number, k: string, v: string) =>
     `<rect class="tile" x="${i * (tw + gap)}" y="${top}" width="${tw}" height="40" rx="8"/>
@@ -528,7 +492,7 @@ const headerSvg = (W: number, title: string, t: ReturnType<typeof totals>): stri
     W,
     headerHeight(title),
     `${title ? `<text class="t" x="0" y="15" font-family="${FONT}" font-size="14" font-weight="600">${xml(fitText(title, 14, W))}</text>` : ''}
-${tile(0, s.cost, '≈' + fmtCost(t.cost))}${tile(1, s.tokens, fmtTokens(t.tokens))}${tile(2, s.time, fmtTime(t.time))}`,
+${tile(0, s.tokens, fmtTokens(t.tokens))}${tile(1, s.time, fmtTime(t.time))}`,
   )
 }
 
@@ -554,7 +518,7 @@ const agentSvg = (W: number, a: AgentRun, at: number): string => {
   if (a.status === 'failed') meta.push(s.failed)
   const barW = textW
   const progress = progressOf(a)
-  const stats = `ctx ${ctx}% · ${fmtTokens(a.contextTokens)}  ≈${fmtCost(a.costUsd)}  ${fmtTime(elapsed(a, at))}`
+  const stats = `ctx ${ctx}% · ${fmtTokens(a.contextTokens)}  ${fmtTime(elapsed(a, at))}`
   const steps = a.stepTotal ? `${a.stepDone ?? 0}/${a.stepTotal}${a.stepNote ? ' · ' + a.stepNote : ''}` : ''
   const stepsW = Math.max(0, barW - textWidth(stats, 11) - 12)
   // Without reported steps the bar falls back to the context, drawn grey.
@@ -607,7 +571,7 @@ const compactSvg = (W: number, list: AgentRun[], planned: Planned[], t: ReturnTy
     W,
     32,
     `${body}${more ? `<text class="s" x="${x}" y="21" font-family="${FONT}" font-size="12">+${more}</text>` : ''}
-<text class="s" x="${W}" y="21" text-anchor="end" font-family="${FONT}" font-size="12" font-variant-numeric="tabular-nums">≈${fmtCost(t.cost)} · ${fmtTokens(t.tokens)} · ${fmtTime(t.time)}</text>`,
+<text class="s" x="${W}" y="21" text-anchor="end" font-family="${FONT}" font-size="12" font-variant-numeric="tabular-nums">${fmtTokens(t.tokens)} · ${fmtTime(t.time)}</text>`,
   )
 }
 
@@ -640,6 +604,11 @@ async function autoOpen($: EngineInterface, key: string): Promise<void> {
   void $.ui.open({ id: PANE, title: tr().pane })
 }
 
+// The bar on top of what the band's hooks beneath drew; alone when nobody
+// beneath drew (the engine's own band, empty without a survey).
+const above = (Box: ElementTable['Box'], bar: RenderElement, below: RenderElement): RenderElement =>
+  below.type === 'engine' ? bar : <Box flexDirection="column">{bar}{below}</Box>
+
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -647,21 +616,24 @@ export const register: Register = (on, options) => {
     await $.tool.register({
       name: 'progress',
       description:
-        'Report /savvy-flow progress to the progress bar above the prompt and the agents panel. ' +
-        'Call it after presenting the plan (title, total, tasks, phase "delegate"), each time a task is accepted (done), ' +
-        'when switching phase or re-planning (tasks), and once at the end with finished: true. Fields left out keep their previous value.',
+        'Show the progress of work in several parts on the progress bar above the prompt and in the agents panel: ' +
+        'any multi-part task, /savvy-flow included. Call it when the work starts (title, total, phase "delegate"), ' +
+        'each time a part is finished (done), when switching phase or re-planning, and once at the end with finished: true. ' +
+        'With /savvy-flow, call it after presenting the plan (title, total, tasks, phase "delegate") and count a task as done once it is accepted after review. ' +
+        'Passing tasks also opens the agents panel; leave them out to show the bar alone. ' +
+        'Fields left out keep their previous value. A request of a single part needs no progress.',
       inputSchema: {
         type: 'object',
         properties: {
           title: { type: 'string', description: 'Short name of the overall task, a few words.' },
-          total: { type: 'integer', minimum: 0, description: 'Number of planned worker tasks.' },
-          done: { type: 'integer', minimum: 0, description: 'Number of tasks accepted after review.' },
+          total: { type: 'integer', minimum: 0, description: 'Number of planned parts (with /savvy-flow, worker tasks).' },
+          done: { type: 'integer', minimum: 0, description: 'Number of parts finished (with /savvy-flow, tasks accepted after review).' },
           phase: { type: 'string', enum: [...PHASES] },
-          finished: { type: 'boolean', description: 'True once the flow is closed.' },
+          finished: { type: 'boolean', description: 'True once the work is done (the flow is closed).' },
           tasks: {
             type: 'array',
             description:
-              'The planned worker tasks in order, numbered from 1. Each title must equal the Agent tool `description` the task will be delegated with, so the panel can match runs to tasks.',
+              'For delegated work (/savvy-flow): the planned worker tasks in order, numbered from 1. Each title must equal the Agent tool `description` the task will be delegated with, so the panel can match runs to tasks. Opens the agents panel.',
             items: {
               type: 'object',
               properties: {
@@ -693,7 +665,7 @@ export const register: Register = (on, options) => {
     })
     await $.command.register({
       name: 'agents-info',
-      description: 'Show or hide the panel of subagents: running, finished and planned, with model, context, cost and time',
+      description: 'Show or hide the panel of subagents: running, finished and planned, with model, context, tokens and time',
     })
 
     // Ticks the running agents' clocks; quiet when nothing runs.
@@ -775,7 +747,6 @@ export const register: Register = (on, options) => {
         contextTokens: 0,
         contextMax: windowOf(started.model),
         tokens: 0,
-        costUsd: 0,
         steps: 0,
         round,
       }
@@ -789,7 +760,7 @@ export const register: Register = (on, options) => {
     return started
   })
 
-  // Each model request of a subagent: live context, tokens and cost.
+  // Each model request of a subagent: live context and tokens.
   on('turn.step', async function* ($, e, next) {
     const result = yield* next(e)
     const agentId = e.agentId
@@ -819,7 +790,6 @@ export const register: Register = (on, options) => {
                 (usage.output_tokens || 0) +
                 (usage.cache_read_input_tokens || 0) +
                 (usage.cache_creation_input_tokens || 0),
-              costUsd: a.costUsd + costOf(model, usage),
               steps: a.steps + 1,
             },
       ),
@@ -848,7 +818,6 @@ export const register: Register = (on, options) => {
                     e.usage.output_tokens +
                     e.usage.cache_read_input_tokens +
                     e.usage.cache_creation_input_tokens,
-                  costUsd: costOf(e.usage.model || a.model, e.usage),
                 }
               : {}),
           }
@@ -892,7 +861,7 @@ export const register: Register = (on, options) => {
       />
     )
     const isEmpty = list.length === 0 && planned.length === 0
-    const summary = `≈${fmtCost(t.cost)}, ${fmtTokens(t.tokens)} ${s.tokensWord}, ${fmtTime(t.time)}`
+    const summary = `${fmtTokens(t.tokens)} ${s.tokensWord}, ${fmtTime(t.time)}`
 
     if (e.surface === 'desktop' && 'Svg' in ui) {
       const { Svg } = ui
@@ -962,7 +931,7 @@ export const register: Register = (on, options) => {
             {progress === null ? <Text dimColor>{ctxBar(ctx, barW)}</Text> : <Text color={color}>{ctxBar(progress * 100, barW)}</Text>}
             <Text dimColor>
               {' '}
-              {steps}ctx {ctx}% · {fmtTokens(a.contextTokens)} ≈{fmtCost(a.costUsd)} {fmtTime(elapsed(a, at))}
+              {steps}ctx {ctx}% · {fmtTokens(a.contextTokens)} {fmtTime(elapsed(a, at))}
             </Text>
           </Text>
         </Box>
@@ -978,7 +947,7 @@ export const register: Register = (on, options) => {
           {toggleCompact}
         </Box>
         <Text dimColor>
-          ≈{fmtCost(t.cost)} · {fmtTokens(t.tokens)} {s.tokensWord} · {fmtTime(t.time)}
+          {fmtTokens(t.tokens)} {s.tokensWord} · {fmtTime(t.time)}
         </Text>
         {p.isCompact ? (
           <Text wrap="truncate-end">
@@ -1022,10 +991,15 @@ export const register: Register = (on, options) => {
     )
   })
 
+  // The band above the prompt is one for every mod: the bar goes on top of
+  // whatever the hooks beneath drew (`next(e)`), never in its place. The
+  // manifest lists token-weather as a dependency, so this hook runs before
+  // its own and the bar sits above the context line.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const f = await read($, flow)
     if (f === null || e.props.hasSurvey) return next(e)
 
+    const below = await next(e)
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
     const list = await read($, agents)
@@ -1045,24 +1019,27 @@ export const register: Register = (on, options) => {
       />
     )
 
-    if ('Svg' in ui) {
+    if (e.surface === 'desktop' && 'Svg' in ui) {
       const { Svg } = ui
       // About 8 CSS px per reported column; the rest is the count, the dismiss
       // and their gaps. No floor above the slot: a row wider than it would wrap.
       const width = Math.max(180, Math.min(1600, (e.props.bodyColumns || 100) * 8 - 96))
-      return (
+      return above(
+        Box,
         <Box flexDirection="row" alignItems="center" gap={1}>
           <Svg source={rowSvg(f, width, isWorking)} alt={`${f.title}: ${label(f)}, ${percent}`} width={width} height={H} />
           {crewButton}
           {dismiss}
-        </Box>
+        </Box>,
+        below,
       )
     }
 
     const cols = e.props.bodyColumns
     const titleW = Math.max(8, Math.min(30, f.title.length + 2, Math.floor(cols / 3)))
     const width = Math.max(6, Math.min(40, cols - titleW - 32))
-    return (
+    return above(
+      Box,
       <Box flexDirection="row" gap={2}>
         <Box width={titleW} flexShrink={0}>
           <Text color={f.isFinished ? DONE : ACCENT}>● </Text>
@@ -1074,7 +1051,8 @@ export const register: Register = (on, options) => {
         <Text color={CLAY}>▣</Text>
         {crewButton}
         {dismiss}
-      </Box>
+      </Box>,
+      below,
     )
   })
 }

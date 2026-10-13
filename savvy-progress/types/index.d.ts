@@ -31,7 +31,6 @@ export type AgentRun = {
   contextTokens: number
   contextMax: number
   tokens: number
-  costUsd: number
   steps: number
   round: number
   /** Self-reported by the worker through the `step` tool. */
