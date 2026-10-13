@@ -201,6 +201,21 @@ describe("the line", () => {
   });
 });
 
+describe("alignment", () => {
+  test("the line starts at the band's left edge: no padding, the icon in column 0, the word in column 3", async ($: any, on: any) => {
+    engine($, on, null, (Box: any, Text: any) => Box({ key: "other", children: [Text({ children: "a note" })] }));
+    await start($);
+    await complete($, 70_000);
+    const line = (await draw($)).tree.children[0];
+    expect(isLine(line)).toBe(true);
+    for (const prop of ["padding", "paddingX", "paddingLeft", "margin", "marginX", "marginLeft"]) {
+      expect(line.props[prop], prop).toBeUndefined();
+    }
+    // The first Text is the icon, two spaces and the word: the word starts in column 3.
+    expect(line.children[0].children[0].indexOf("Clear")).toBe(3);
+  });
+});
+
 describe("sharing the band", () => {
   test("alone, the line is the whole band: no engine drawing, no blank row", async ($: any, on: any) => {
     engine($, on);
@@ -210,7 +225,7 @@ describe("sharing the band", () => {
     expect(isLine(tree)).toBe(true);
     expect(tree).toEqual({
       type: "Box",
-      props: { flexDirection: "row", paddingX: 1 },
+      props: { flexDirection: "row" },
       children: [
         { type: "Text", props: { color: "success", bold: true }, children: ["☀  Clear"] },
         { type: "Text", children: ["  7% of context"] },

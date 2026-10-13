@@ -7,7 +7,7 @@ A Claude Code mod that draws a live forecast of your context window in the band 
 ## What it shows
 
 ```text
- ☀  Clear  7% of context  70k / 1M
+☀  Clear  7% of context  70k / 1M
 ```
 
 The band shows:
@@ -84,6 +84,7 @@ This mod started from the `token-weather` example in [anthropics/claude-code-pla
 - **New limits and colors.** Clear under 50%, Cloudy 50–69%, Showers 70–79%, Storm 80–89%, Compact soon from 90%, compared on the exact share of the window. Colors are Claude Code theme keys (`success`, `warning`, `error`), the plain text color for Cloudy, and a fixed orange for Storm. The example used fixed ANSI colors and limits at 25/50/75/90% of the rounded percentage.
 - **No chart and no last-turn change.** The line keeps the icon, the forecast word, the percentage and the tokens. The example also drew a chart of the last turns and how much the last turn added.
 - **A shared band.** The mod passes the band on and puts its line on top of what the mods beneath drew. The example drew its line in place of anything else.
+- **No left padding.** The line starts at the band's left edge, so the icon lines up with the dot of the savvy-progress bar above it and the forecast word with its title. The example padded the line by one column on each side.
 - **Fixed props.** The mod reads `hasSurvey` from `e.props`, where Claude Code puts it. The example read it from the event itself, so the band never gave way to surveys.
 - **Tests.** `tests/token-weather.test.ts` is new and runs under `claude plugin test`.
 - **Packaging.** A new author and marketplace, this README rewritten, and the example's screenshots removed, since they showed the old colors.

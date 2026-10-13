@@ -4,7 +4,8 @@
 // Modified by joaopasbento in 2026 from the token-weather example in
 // anthropics/claude-code-playground (commit 569c5283d9a0): updates mid-response,
 // new limits and colors, props read from e.props, the chart and the last-turn
-// change removed, and the band shared with the mods drawn beneath.
+// change removed, the band shared with the mods drawn beneath, and the line
+// drawn from the band's left edge.
 //
 // Token Weather: a live forecast of the context window, above the prompt.
 //
@@ -129,9 +130,10 @@ async function takeLiveReading($, usage) {
 function band(Box, Text) {
   const now = live ?? reading;
   const f = forecastFor(now.tokens / now.window);
+  // No left padding: the line starts at the band's left edge, as the bar of
+  // savvy-progress above it does, so their icons and words line up.
   return Box({
     flexDirection: "row",
-    paddingX: 1,
     children: [
       Text({ ...colored(f), bold: true, children: `${f.icon}  ${f.word}` }),
       Text({ children: `  ${now.percent}% of context` }),
