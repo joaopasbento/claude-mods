@@ -173,6 +173,9 @@ const H = 22
 const BAR_H = 16
 const CRAB_W = 26
 const CELL = 3
+// The title starts where token-weather's forecast word does under it: after
+// its icon (about 12 px) and two spaces (about 7 px).
+const TITLE_X = 19
 const FONT = "-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif"
 
 const xml = (s: string): string =>
@@ -200,7 +203,7 @@ const fitText = (s: string, size: number, maxW: number): string => {
 const rowSvg = (f: Flow, W: number, isWorking: boolean): string => {
   // The title takes what it needs, up to 40% of the row; the bar takes the rest.
   const title = fitText(f.title, 13, Math.max(60, W * 0.4))
-  const BAR_X = Math.round(16 + textWidth(title, 13) + 12)
+  const BAR_X = Math.round(TITLE_X + textWidth(title, 13) + 12)
   const BAR_W = Math.max(60, W - BAR_X - 46 - CRAB_W)
   const color = f.isFinished ? DONE : ACCENT
   const y0 = (H - BAR_H) / 2
@@ -248,7 +251,7 @@ const rowSvg = (f: Flow, W: number, isWorking: boolean): string => {
 </style>
 <defs><clipPath id="c"><rect x="0" y="0" width="${BAR_W}" height="${BAR_H}" rx="${BAR_H / 2}"/></clipPath></defs>
 <circle cx="5" cy="${H / 2}" r="4" fill="${color}"/>
-<text class="t" x="16" y="${H / 2 + 4.5}" font-family="${FONT}" font-size="13" font-weight="500">${xml(title)}</text>
+<text class="t" x="${TITLE_X}" y="${H / 2 + 4.5}" font-family="${FONT}" font-size="13" font-weight="500">${xml(title)}</text>
 <g transform="translate(${BAR_X},${y0})">
 <rect class="k" width="${BAR_W}" height="${BAR_H}" rx="${BAR_H / 2}"/>
 <g clip-path="url(#c)">
@@ -448,7 +451,28 @@ const COSTUMES: Record<string, (f: Fill, t: string) => void> = {
   other: f => crabBody(f),
 }
 
-const costumeOf = (type: string): string => (type === 'Explore' ? 'explore' : tierOf(type))
+// How each agent type is dressed in the panel, by its exact subagentType:
+// the costume (one of COSTUMES) and the color of its name, mark and bar. Add
+// a type here to dress it; a type left out, or one a plugin prefixes, keeps
+// the plain crab. savvy-flow's workers are dressed by their tier instead.
+const AGENT_LOOKS: Record<string, { costume: string; color: string }> = {
+  'general-purpose': { costume: 'careful', color: '#BA7517' },
+  Explore: { costume: 'explore', color: '#C75B92' },
+  Plan: { costume: 'medium', color: '#378ADD' },
+  'claude-code-guide': { costume: 'heavy', color: '#D85A30' },
+  claude: { costume: 'fable', color: '#7F77DD' },
+  fork: { costume: 'light', color: '#1D9E75' },
+}
+
+type Look = { costume: string; color: string; name: string; isSavvy: boolean }
+
+// A savvy worker by its tier, as before; any other agent by AGENT_LOOKS.
+const lookOf = (type: string): Look => {
+  const tier = tierOf(type)
+  if (tier !== 'other') return { costume: tier, color: colorOf(tier), name: tier, isSavvy: true }
+  const look = Object.hasOwn(AGENT_LOOKS, type) ? AGENT_LOOKS[type] : undefined
+  return { costume: look?.costume ?? 'other', color: look?.color ?? colorOf('other'), name: type, isSavvy: false }
+}
 
 const CRAB_SCALE = 1.1
 
@@ -509,8 +533,8 @@ const ctxOf = (a: AgentRun): number => (a.contextMax ? Math.min(100, Math.round(
 
 const agentSvg = (W: number, a: AgentRun, at: number): string => {
   const s = tr()
-  const tier = tierOf(a.type)
-  const color = colorOf(tier)
+  const look = lookOf(a.type)
+  const color = look.color
   const ctx = ctxOf(a)
   const textW = W - 42 - 22
   const meta = [a.effort ? `${modelName(a.model)} · ${a.effort}` : modelName(a.model)]
@@ -526,9 +550,9 @@ const agentSvg = (W: number, a: AgentRun, at: number): string => {
   return svg(
     W,
     66,
-    `${crab(0, 14, costumeOf(a.type), false, a.status === 'running')}
+    `${crab(0, 14, look.costume, false, a.status === 'running')}
 <text class="t" x="42" y="18" font-family="${FONT}" font-size="13" font-weight="600">${xml(fitText(a.description || a.type, 13, textW))}</text>
-<text x="42" y="34" font-family="${FONT}" font-size="11"><tspan fill="${color}">${xml(tier === 'other' ? a.type : tier)}</tspan><tspan class="s">  ${xml(meta.join('  ·  '))}</tspan></text>
+<text x="42" y="34" font-family="${FONT}" font-size="11"><tspan fill="${color}">${xml(look.name)}</tspan><tspan class="s">  ${xml(meta.join('  ·  '))}</tspan></text>
 ${steps && stepsW > 30 ? `<text class="t" x="42" y="49" font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${xml(fitText(steps, 11, stepsW))}</text>` : ''}
 <text class="s" x="${42 + barW}" y="49" text-anchor="end" font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${stats}</text>
 <rect class="k" x="42" y="55" width="${barW}" height="4" rx="2"/><rect${progress === null ? ' class="m"' : ''} x="42" y="55" width="${fillW}" height="4" rx="2"${progress === null ? '' : ` fill="${color}"`}/>
@@ -556,8 +580,8 @@ ${statusMark(W - 8, 16, 'planned', color)}
 
 const compactSvg = (W: number, list: AgentRun[], planned: Planned[], t: ReturnType<typeof totals>): string => {
   const icons = [
-    ...list.filter(a => a.status === 'running').map(a => ({ k: costumeOf(a.type), c: colorOf(tierOf(a.type)), s: 'running', dim: false })),
-    ...list.filter(a => a.status !== 'running').map(a => ({ k: costumeOf(a.type), c: colorOf(tierOf(a.type)), s: a.status, dim: false })),
+    ...list.filter(a => a.status === 'running').map(a => ({ k: lookOf(a.type).costume, c: lookOf(a.type).color, s: 'running', dim: false })),
+    ...list.filter(a => a.status !== 'running').map(a => ({ k: lookOf(a.type).costume, c: lookOf(a.type).color, s: a.status, dim: false })),
     ...planned.map(p => ({ k: p.tier in TIER_COLOR ? p.tier : 'other', c: colorOf(p.tier), s: 'planned', dim: true })),
   ]
   const fit = Math.max(1, Math.floor((W - 150) / 36))
@@ -906,8 +930,8 @@ export const register: Register = (on, options) => {
     const cols = Math.max(24, e.props.bodyColumns || 40)
     const barW = Math.max(6, Math.min(20, cols - 34))
     const row = (a: AgentRun) => {
-      const tier = tierOf(a.type)
-      const color = colorOf(tier)
+      const look = lookOf(a.type)
+      const color = look.color
       const ctx = ctxOf(a)
       const progress = progressOf(a)
       const model = a.effort ? `${modelName(a.model)} · ${a.effort}` : modelName(a.model)
@@ -921,11 +945,23 @@ export const register: Register = (on, options) => {
             </Text>
             <Text color={a.status === 'failed' ? 'red' : a.status === 'done' ? 'green' : color}>{STATUS_GLYPH[a.status]}</Text>
           </Box>
-          <Text dimColor wrap="truncate-end">
-            {'  '}
-            {tier === 'other' ? a.type : tier} · {model}
-            {a.round > 1 ? ` · ${s.round} ${a.round}` : ''}
-          </Text>
+          {look.isSavvy ? (
+            <Text dimColor wrap="truncate-end">
+              {'  '}
+              {look.name} · {model}
+              {a.round > 1 ? ` · ${s.round} ${a.round}` : ''}
+            </Text>
+          ) : (
+            <Text wrap="truncate-end">
+              {'  '}
+              <Text color={color}>{look.name}</Text>
+              <Text dimColor>
+                {' '}
+                · {model}
+                {a.round > 1 ? ` · ${s.round} ${a.round}` : ''}
+              </Text>
+            </Text>
+          )}
           <Text wrap="truncate-end">
             {'  '}
             {progress === null ? <Text dimColor>{ctxBar(ctx, barW)}</Text> : <Text color={color}>{ctxBar(progress * 100, barW)}</Text>}
@@ -952,7 +988,7 @@ export const register: Register = (on, options) => {
         {p.isCompact ? (
           <Text wrap="truncate-end">
             {[...running, ...finished].map(a => (
-              <Text key={a.id} color={colorOf(tierOf(a.type))}>
+              <Text key={a.id} color={lookOf(a.type).color}>
                 {STATUS_GLYPH[a.status]}{' '}
               </Text>
             ))}
@@ -1036,13 +1072,15 @@ export const register: Register = (on, options) => {
     }
 
     const cols = e.props.bodyColumns
-    const titleW = Math.max(8, Math.min(30, f.title.length + 2, Math.floor(cols / 3)))
+    // "●" and two spaces, so the title starts in column 3, where the forecast
+    // word of token-weather's line (icon, two spaces, word) starts under it.
+    const titleW = Math.max(9, Math.min(31, f.title.length + 3, Math.floor(cols / 3) + 1))
     const width = Math.max(6, Math.min(40, cols - titleW - 32))
     return above(
       Box,
       <Box flexDirection="row" gap={2}>
         <Box width={titleW} flexShrink={0}>
-          <Text color={f.isFinished ? DONE : ACCENT}>● </Text>
+          <Text color={f.isFinished ? DONE : ACCENT}>●  </Text>
           <Text wrap="truncate-end">{f.title}</Text>
         </Box>
         <Text color={f.isFinished ? DONE : ACCENT}>{barText(f, width)}</Text>

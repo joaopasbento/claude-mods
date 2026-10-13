@@ -219,3 +219,158 @@ describe("no cost anywhere", () => {
     expect(agentsInfo.description).not.toContain("cost");
   });
 });
+
+// The node of a tree that passes `test`, depth first.
+function findNode(node: any, test: (n: any) => boolean): any {
+  if (!node || typeof node !== "object") return undefined;
+  if (test(node)) return node;
+  for (const child of node.children ?? []) {
+    const found = findNode(child, test);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+describe("alignment with token-weather's line", () => {
+  test("terminal: the title starts in column 3, after the dot and two spaces", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await progress($, { title: "Tidy the docs", total: 4, done: 1, phase: "delegate" });
+    const { tree } = await band($, "terminal");
+    const slot = tree.children[0];
+    // The title's slot: the dot and two spaces, then the title, its width the title's plus three.
+    expect(slot.props.width).toBe("Tidy the docs".length + 3);
+    expect(slot.children[0].children).toEqual(["●  "]);
+    expect(slot.children[1].children).toEqual(["Tidy the docs"]);
+  });
+
+  test("desktop: the title at x=19 and the bar after it, the dot where it was", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await progress($, { title: "Tidy the docs", total: 4, done: 1, phase: "delegate" });
+    const { tree } = await band($, "desktop");
+    const source: string = tree.children[0].props.source;
+    expect(source).toMatch(/<text class="t" x="19" [^>]*>Tidy the docs<\/text>/);
+    expect(source).toContain('<circle cx="5" cy="11" r="4"');
+    const barX = Number(/<g transform="translate\(([\d.]+),/.exec(source)?.[1]);
+    // 19 + the title's width (13 px text) + 12.
+    expect(barX).toBeGreaterThan(19 + 12);
+  });
+});
+
+// Each type of the table: its costume and its color.
+const LOOKS: Array<[string, string, string]> = [
+  ["general-purpose", "careful", "#BA7517"],
+  ["Explore", "explore", "#C75B92"],
+  ["Plan", "medium", "#378ADD"],
+  ["claude-code-guide", "heavy", "#D85A30"],
+  ["claude", "fable", "#7F77DD"],
+  ["fork", "light", "#1D9E75"],
+  // Anything else, a plugin's prefixed agent included, keeps the plain crab.
+  ["some-agent", "other", "#888780"],
+  ["my-plugin:Explore", "other", "#888780"],
+  // savvy-flow's workers, by their tier, as before.
+  ["savvy-careful", "careful", "#BA7517"],
+  ["savvy-flow:savvy-light", "light", "#1D9E75"],
+];
+
+async function spawnAll($: any) {
+  let n = 0;
+  for (const [type] of LOOKS) {
+    n += 1;
+    await $.agent.spawn({ tool_use_id: `t${n}`, prompt: "work", description: `part ${n}`, subagentType: type, parentModel: "claude-opus-5-5" });
+  }
+}
+
+async function pane($: any, surface: "terminal" | "desktop", isCompact = false) {
+  const ui = await $.ui.mount({
+    plugin: PLUGIN,
+    surface,
+    component: "Pane",
+    requestId: PANE,
+    props: { title: "Agents", isFocused: false, bodyColumns: 80, placement: "dock" } as any,
+    viewport: { columns: 120, rows: 40 },
+  });
+  if (isCompact) await ui.press({ key: "compact" });
+  const tree = await ui.drawn();
+  await ui.unmount();
+  return tree;
+}
+
+describe("each agent type dressed by the table", () => {
+  test("desktop rows: costume, and the type's name, mark and bar in its color", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await spawnAll($);
+    const tree = await pane($, "desktop");
+    LOOKS.forEach(([type, costume, color], i) => {
+      const row = findNode(tree, (n) => n.type === "Svg" && String(n.props.alt).startsWith(`part ${i + 1}:`));
+      expect(row, type).toBeDefined();
+      const source: string = row.props.source;
+      expect(source, type).toContain(`class="c-${costume} run"`);
+      const name = type.startsWith("savvy") ? costume : type;
+      expect(source, type).toContain(`<tspan fill="${color}">${name}</tspan>`);
+      expect(source, type).toContain(`<circle class="live" cx=`);
+      expect(source, type).toMatch(new RegExp(`<circle class="live" [^>]*fill="${color}"`));
+    });
+  });
+
+  test("compact view: each crab in its costume, its live dot in the type's color", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    // The compact row fits (W - 150) / 36 crabs: 13 at 80 columns, all ten here.
+    await spawnAll($);
+    const tree = await pane($, "desktop", true);
+    const source: string = findNode(tree, (n) => n.type === "Svg").props.source;
+    for (const [type, costume, color] of LOOKS) {
+      expect(source, type).toContain(`class="c-${costume} run"`);
+      expect(source, type).toContain(`fill="${color}"/>`);
+    }
+  });
+
+  test("terminal rows: ▣ in the type's color, the name in it too (savvy tiers dim, as before)", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await spawnAll($);
+    const tree = await pane($, "terminal");
+    LOOKS.forEach(([type, costume, color], i) => {
+      const row = findNode(tree, (n) => n.type === "Box" && n.props?.key === `agent-t${i + 1}`);
+      expect(row, type).toBeDefined();
+      const mark = findNode(row, (n) => n.type === "Text" && n.children?.[0] === "▣");
+      expect(mark.props.color, type).toBe(color);
+      if (type.startsWith("savvy")) {
+        const meta = findNode(row, (n) => n.type === "Text" && n.props?.dimColor && String(n.children?.[1] ?? "").startsWith(costume));
+        expect(meta, type).toBeDefined();
+      } else {
+        const name = findNode(row, (n) => n.type === "Text" && n.children?.[0] === type);
+        expect(name?.props.color, type).toBe(color);
+      }
+    });
+  });
+
+  test("terminal compact view: each glyph in the type's color", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await spawnAll($);
+    const tree = await pane($, "terminal", true);
+    // The compact line: one glyph per agent, the running ones newest first.
+    const line = findNode(tree, (n) => n.type === "Text" && n.children?.length === LOOKS.length && n.children.every((c: any) => c.type === "Text"));
+    const colors = line.children.map((c: any) => c.props.color);
+    expect(colors).toEqual(LOOKS.map(([, , color]) => color).reverse());
+  });
+
+  test("planned tasks and the band's crab stay as before", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await progress($, { title: "Tidy the docs", total: 1, phase: "delegate", tasks: [{ title: "part 9", tier: "heavy" }] });
+    const tree = await pane($, "desktop");
+    const planned = findNode(tree, (n) => n.type === "Svg" && String(n.props.alt).startsWith("1. part 9"));
+    expect(planned.props.source).toContain('class="c-heavy"');
+    expect(planned.props.source).toContain('<tspan fill="#D85A30">heavy</tspan>');
+    const { tree: bar } = await band($, "desktop");
+    expect(bar.children[0].props.source).toContain('class="c-other');
+    for (const [, costume] of LOOKS.filter(([, c]) => c !== "other")) {
+      expect(bar.children[0].props.source).not.toContain(`class="c-${costume}`);
+    }
+  });
+});
