@@ -1,8 +1,11 @@
 // Token Weather under `claude plugin test`: the test's own hooks stand for
 // the engine, answering `session.usage` with the figures a response would
 // have left, `turn.step` with a model response, and `session.start` and
-// `turn.complete` as the engine's own steps, so each test walks the
-// band through turns and through model requests inside a turn.
+// `turn.complete` as the engine's own steps, and `ui.render` as whatever is
+// drawn beneath the mod in the band: the engine's own drawing (`{ type:
+// "engine" }`, what a real session hands on when nobody beneath draws) or
+// another mod's tree. So each test walks the band through turns, through
+// model requests inside a turn, and beside other mods.
 
 import { describe, expect, test } from "claude-code/testing";
 
@@ -15,7 +18,11 @@ const ORANGE = "#cc5a14";
 // status line's is.
 let tokens = 0;
 
-function engine($: any, on: any, stepUsage: object | null = null) {
+// The engine's own drawing of the band, as `next(e)` resolves to it when no
+// plugin beneath draws: a real session answers this shape (ref 1).
+const ENGINE = { type: "engine", ref: 1 };
+
+function engine($: any, on: any, stepUsage: object | null = null, beneath: (Box: any, Text: any) => object = () => ENGINE) {
   on("session.usage", () => ({
     value: {
       startedAt: 0,
@@ -23,10 +30,10 @@ function engine($: any, on: any, stepUsage: object | null = null) {
       rateLimits: [],
     },
   }));
-  // The engine draws nothing of its own above the prompt.
+  // What is drawn beneath the mod: by default the engine's own band.
   on("ui.render", { component: "AbovePrompt" }, ($: any, e: any) => {
-    const { Box } = $.ui.resolve(e);
-    return Box({ key: "engine" });
+    const { Box, Text } = $.ui.resolve(e);
+    return beneath(Box, Text);
   });
   on("session.start", (_$: any, e: any) => ({ cwd: e.cwd }));
   on("turn.complete", (_$: any, e: any) => ({ text: e.answer }));
@@ -55,8 +62,10 @@ async function complete($: any, fill: number, agentId?: string) {
   await $.turn.complete({ answer: "", durationMs: 1, isAborted: false, turnId: "t", reason: "answer", ...(agentId ? { agentId } : {}) });
 }
 
-// The band's Text elements and whether the engine drew its own instead.
-async function draw($: any, props: { hasSurvey?: boolean; bodyColumns?: number } = {}) {
+type Props = { hasSurvey?: boolean; bodyColumns?: number; maxRows?: number };
+
+// The band as drawn: its tree and its Text elements, in the order drawn.
+async function draw($: any, props: Props = {}) {
   const ui = await $.ui.mount({
     plugin: PLUGIN,
     surface: "terminal",
@@ -64,20 +73,25 @@ async function draw($: any, props: { hasSurvey?: boolean; bodyColumns?: number }
     props: { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 120, ...props } as any,
     viewport: { columns: 120, rows: 40 },
   });
+  const tree = await ui.drawn();
   const elements = await ui.findAll({ type: "Text" });
-  const isEngines = (await ui.find({ key: "engine" })) !== undefined;
   await ui.unmount();
-  return { elements, isEngines };
+  return { tree, elements };
 }
 
-async function band($: any, props: { hasSurvey?: boolean; bodyColumns?: number } = {}) {
+async function band($: any, props: Props = {}) {
   return (await draw($, props)).elements.map((t: any) => t.text);
 }
 
-// The forecast's Text and the chart's, which share the forecast's color.
+// The forecast's Text.
 async function forecast($: any) {
   const { elements } = await draw($);
-  return { label: elements[0], chart: elements[4] };
+  return { label: elements[0] };
+}
+
+// The token-weather line as the mod draws it: one row Box of three Texts.
+function isLine(node: any) {
+  return node?.type === "Box" && node.props?.flexDirection === "row" && node.children?.length === 3 && node.children.every((c: any) => c.type === "Text");
 }
 
 // Both sides of each limit, by exact tokens of a 1M window, with the color
@@ -94,27 +108,20 @@ const LIMITS: Array<[number, string, string | undefined]> = [
 ];
 
 describe("once per turn, as in the example", () => {
-  test("each main turn adds a reading to the chart and the change", async ($: any, on: any) => {
+  test("each main turn updates the line", async ($: any, on: any) => {
     engine($, on);
     await start($);
     await complete($, 160_000);
     await complete($, 450_000);
-    const texts = await band($);
-    expect(texts).toContain("☀  Clear");
-    expect(texts).toContain("  45% of context");
-    expect(texts).toContain("  450k / 1M");
-    expect(texts).toContain("▂▄");
-    expect(texts).toContain("  ▲ +290k last turn");
+    expect(await band($)).toEqual(["☀  Clear", "  45% of context", "  450k / 1M"]);
   });
 
-  test("a subagent's turn adds no reading", async ($: any, on: any) => {
+  test("a subagent's turn leaves the line as it was", async ($: any, on: any) => {
     engine($, on);
     await start($);
     await complete($, 100_000);
     await complete($, 950_000, "agent-1");
-    const texts = await band($);
-    expect(texts).toContain("  10% of context");
-    expect(texts).toContain("▁");
+    expect(await band($)).toEqual(["☀  Clear", "  10% of context", "  100k / 1M"]);
   });
 });
 
@@ -124,10 +131,9 @@ describe("limits and colors", () => {
     await start($);
     for (const [fill, word, color] of LIMITS) {
       await complete($, fill);
-      const { label, chart } = await forecast($);
+      const { label } = await forecast($);
       expect(label.text, `${fill}`).toBe(word);
       expect(label.props.color, `${fill}`).toBe(color);
-      expect(chart.props.color, `${fill} chart`).toBe(color);
     }
   });
 
@@ -171,56 +177,101 @@ describe("limits and colors", () => {
   });
 });
 
-describe("the chart against the stop", () => {
-  test("160k of 1M is a low bar, alone or not", async ($: any, on: any) => {
+describe("the line", () => {
+  test("icon and word, percent, tokens: nothing more, at any width", async ($: any, on: any) => {
     engine($, on);
     await start($);
+    await complete($, 70_000);
     await complete($, 160_000);
-    expect(await band($)).toContain("▂");
+    for (const bodyColumns of [40, 59, 60, 120, 200]) {
+      expect(await band($, { bodyColumns }), `${bodyColumns}`).toEqual(["☀  Clear", "  16% of context", "  160k / 1M"]);
+    }
   });
 
-  test("bars measure against 90% of the window", async ($: any, on: any) => {
+  test("no chart and no last-turn change", async ($: any, on: any) => {
     engine($, on);
     await start($);
-    for (const fill of [100_000, 450_000, 899_999, 900_000, 1_000_000]) {
+    for (const fill of [100_000, 450_000, 899_999]) {
       await complete($, fill);
     }
-    // 100k: 0.78 of a step; 450k: half the stop; 899,999: just short; 900k and 1M: full.
-    expect(await band($)).toContain("▁▄▇██");
+    const joined = (await band($)).join("");
+    for (const gone of ["last turn", "▲", "▼", "steady", ..."▁▂▃▄▅▆▇█"]) {
+      expect(joined, gone).not.toContain(gone);
+    }
   });
 });
 
-describe("the band's props", () => {
-  test("a survey takes the band", async ($: any, on: any) => {
+describe("sharing the band", () => {
+  test("alone, the line is the whole band: no engine drawing, no blank row", async ($: any, on: any) => {
     engine($, on);
+    await start($);
+    await complete($, 70_000);
+    const { tree, elements } = await draw($);
+    expect(isLine(tree)).toBe(true);
+    expect(tree).toEqual({
+      type: "Box",
+      props: { flexDirection: "row", paddingX: 1 },
+      children: [
+        { type: "Text", props: { color: "success", bold: true }, children: ["☀  Clear"] },
+        { type: "Text", children: ["  7% of context"] },
+        { type: "Text", props: { dimColor: true }, children: ["  70k / 1M"] },
+      ],
+    });
+    expect(elements.map((t: any) => t.text)).toEqual(["☀  Clear", "  7% of context", "  70k / 1M"]);
+  });
+
+  test("the line goes on top of another mod's drawing", async ($: any, on: any) => {
+    engine($, on, null, (Box: any, Text: any) =>
+      Box({ key: "other", flexDirection: "column", children: [Text({ children: "a note" }), Text({ children: "another note" })] }),
+    );
+    await start($);
+    await complete($, 70_000);
+    const { tree, elements } = await draw($);
+    expect(tree.type).toBe("Box");
+    expect(tree.props.flexDirection).toBe("column");
+    // Exactly the two: the line, then what was drawn beneath; no blank row between.
+    expect(tree.children).toHaveLength(2);
+    expect(isLine(tree.children[0])).toBe(true);
+    expect(tree.children[1].props.key).toBe("other");
+    expect(elements.map((t: any) => t.text)).toEqual(["☀  Clear", "  7% of context", "  70k / 1M", "a note", "another note"]);
+  });
+
+  test("a long note beneath: the line stays first, where a band too tall still shows it", async ($: any, on: any) => {
+    const NOTE = "a long note ".repeat(80).trim();
+    engine($, on, null, (Box: any, Text: any) =>
+      Box({ key: "other", flexDirection: "column", children: Array.from({ length: 30 }, (_, i) => Text({ children: `${i}: ${NOTE}` })) }),
+    );
+    await start($);
+    await complete($, 70_000);
+    // A band taller than maxRows shows its top rows, so the line must lead.
+    const { tree, elements } = await draw($, { maxRows: 9 });
+    expect(tree.children).toHaveLength(2);
+    expect(isLine(tree.children[0])).toBe(true);
+    expect(elements.slice(0, 3).map((t: any) => t.text)).toEqual(["☀  Clear", "  7% of context", "  70k / 1M"]);
+  });
+
+  test("a survey takes the band: the mod passes and draws nothing", async ($: any, on: any) => {
+    const SURVEY = (Box: any, Text: any) => Box({ key: "survey", children: [Text({ children: "How is Claude doing?" })] });
+    engine($, on, null, SURVEY);
     await start($);
     await complete($, 160_000);
     const withSurvey = await draw($, { hasSurvey: true });
-    expect(withSurvey.isEngines).toBe(true);
-    expect(withSurvey.elements).toHaveLength(0);
-    const without = await draw($, { hasSurvey: false });
-    expect(without.isEngines).toBe(false);
+    expect(withSurvey.tree.props.key).toBe("survey");
+    expect(withSurvey.elements.map((t: any) => t.text)).toEqual(["How is Claude doing?"]);
   });
 
-  test("the chart hides below 60 columns of the band", async ($: any, on: any) => {
+  test("a survey over the engine's band: still the engine's alone", async ($: any, on: any) => {
     engine($, on);
     await start($);
     await complete($, 160_000);
-    await complete($, 450_000);
-    // The viewport stays 120 wide: only bodyColumns narrows.
-    const narrow = await band($, { bodyColumns: 59 });
-    expect(narrow).toContain("☀  Clear");
-    expect(narrow).not.toContain("   last turns ");
-    expect(narrow).not.toContain("▂▄");
-    expect(narrow).not.toContain("  ▲ +290k last turn");
-    const wide = await band($, { bodyColumns: 60 });
-    expect(wide).toContain("   last turns ");
-    expect(wide).toContain("▂▄");
+    const { tree, elements } = await draw($, { hasSurvey: true });
+    expect(tree).toEqual(ENGINE);
+    expect(elements).toHaveLength(0);
   });
 });
 
 describe("mid-response, after each model request", () => {
-  test("the state follows the step; the chart and the change stay per turn", async ($: any, on: any) => {
+  test("the line follows the step", async ($: any, on: any) => {
     engine($, on);
     await start($);
     await complete($, 160_000);
@@ -228,27 +279,14 @@ describe("mid-response, after each model request", () => {
 
     // The next turn: a request that called a tool, then the one after the tool's result.
     await step($, 600_000, 0);
-    let texts = await band($);
-    expect(texts).toContain("☁  Cloudy");
-    expect(texts).toContain("  60% of context");
-    expect(texts).toContain("  600k / 1M");
-    expect(texts).toContain("▂▄");
-    expect(texts).toContain("  ▲ +290k last turn");
+    expect(await band($)).toEqual(["☁  Cloudy", "  60% of context", "  600k / 1M"]);
 
     await step($, 750_000, 1);
-    texts = await band($);
-    expect(texts).toContain("☂  Showers");
-    expect(texts).toContain("  75% of context");
-    expect(texts).toContain("  750k / 1M");
-    expect(texts).toContain("▂▄");
-    expect(texts).toContain("  ▲ +290k last turn");
+    expect(await band($)).toEqual(["☂  Showers", "  75% of context", "  750k / 1M"]);
 
-    // The turn ends: the reading joins the chart and the change counts the whole turn.
-    await complete($, 750_000);
-    texts = await band($);
-    expect(texts).toContain("☂  Showers");
-    expect(texts).toContain("▂▄▆");
-    expect(texts).toContain("  ▲ +300k last turn");
+    // The turn ends: the turn's reading takes over.
+    await complete($, 760_000);
+    expect(await band($)).toEqual(["☂  Showers", "  76% of context", "  760k / 1M"]);
   });
 
   test("a subagent's model requests leave the band as it was", async ($: any, on: any) => {
@@ -256,10 +294,7 @@ describe("mid-response, after each model request", () => {
     await start($);
     await complete($, 100_000);
     await step($, 950_000, 0, "agent-1");
-    const texts = await band($);
-    expect(texts).toContain("☀  Clear");
-    expect(texts).toContain("  10% of context");
-    expect(texts).toContain("  100k / 1M");
+    expect(await band($)).toEqual(["☀  Clear", "  10% of context", "  100k / 1M"]);
   });
 
   test("a step's own usage counts, whatever session.usage still holds", async ($: any, on: any) => {
@@ -269,11 +304,7 @@ describe("mid-response, after each model request", () => {
     await complete($, 100_000);
     // session.usage still reports the previous response.
     await step($, 100_000, 0);
-    const texts = await band($);
-    expect(texts).toContain("☁  Cloudy");
-    expect(texts).toContain("  60% of context");
-    expect(texts).toContain("  600k / 1M");
-    expect(texts).toContain("▁");
+    expect(await band($)).toEqual(["☁  Cloudy", "  60% of context", "  600k / 1M"]);
   });
 
   test("before any turn, a step alone draws the band", async ($: any, on: any) => {

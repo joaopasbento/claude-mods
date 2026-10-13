@@ -3,30 +3,29 @@
 //
 // Modified by joaopasbento in 2026 from the token-weather example in
 // anthropics/claude-code-playground (commit 569c5283d9a0): updates mid-response,
-// new limits and colors, an absolute chart, and props read from e.props.
+// new limits and colors, props read from e.props, the chart and the last-turn
+// change removed, and the band shared with the mods drawn beneath.
 //
 // Token Weather: a live forecast of the context window, above the prompt.
 //
 // turn.complete: after each main-loop turn, read the context window's fill
-// from $.session.usage() (the same figures the status line shows) and keep
-// the last HISTORY readings.
+// from $.session.usage() (the same figures the status line shows).
 // turn.step: after each model request of a main-loop turn (each tool the
 // model uses ends one request and starts the next), take a live reading from
 // that request's own usage (the same sum the status line's tokens are), with
-// the window from $.session.usage(): the icon, percent and tokens follow it
-// mid-response, while the chart and the last-turn change count whole turns.
+// the window from $.session.usage(), so the line follows it mid-response.
 // session.start: take a first reading, so the band shows before any turn.
-// ui.render (AbovePrompt): one line: icon, forecast word, percent, tokens
-// used of the window, and a block-character chart of the recent turns, each
-// bar measured against STOP of the window (a full bar is the stop reached).
+// ui.render (AbovePrompt): one line: icon, forecast word, percent, and tokens
+// used of the window. The band is one for every mod: the line goes on top of
+// whatever the hooks beneath drew (await next(e)), so when the band is taller
+// than its rows and shows its top, the line stays in view; alone, it is the
+// whole band, as before.
 //
 // The host reads on(...) and $.noun.method(...) from source, so they are
 // spelled literally, and helpers that take $ are top-level functions.
 
-const HISTORY = 12;
-const BARS = "▁▂▃▄▅▆▇█";
 // The stop: the share of the window where the session is meant to end
-// (900k of 1M). The last forecast starts there and a full bar reaches it.
+// (900k of 1M). The last forecast starts there.
 const STOP = 0.9;
 
 // Forecast bands, by the exact share of the window used (tokens / window,
@@ -43,8 +42,8 @@ const FORECAST = [
   { upTo: Infinity, icon: "↯", word: "Compact soon", color: "error" },
 ];
 
-// Readings: { tokens, window, percent }, oldest first.
-let readings = [];
+// The last turn's reading: { tokens, window, percent }; null before any.
+let reading = null;
 // The reading after the latest model request of the running turn; null
 // between turns, when the band shows the last turn's reading.
 let live = null;
@@ -52,7 +51,7 @@ let live = null;
 export function register(on) {
   on("session.start", async ($, e, next) => {
     const result = await next(e);
-    readings = [];
+    reading = null;
     live = null;
     await takeReading($);
     return result;
@@ -75,12 +74,18 @@ export function register(on) {
     return result;
   });
 
-  on("ui.render", { component: "AbovePrompt" }, ($, e, next) => {
-    if (e.props.hasSurvey || (readings.length === 0 && !live)) {
+  on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
+    if (e.props.hasSurvey || (!reading && !live)) {
       return next(e);
     }
+    const below = await next(e);
     const { Box, Text } = $.ui.resolve(e);
-    return band(Box, Text, e.props.bodyColumns ?? 80);
+    const line = band(Box, Text);
+    // Nobody beneath drew: the engine's own band, empty without a survey.
+    if (!below || below.type === "engine") {
+      return line;
+    }
+    return Box({ flexDirection: "column", children: [line, below] });
   });
 }
 
@@ -92,12 +97,7 @@ async function takeReading($) {
     }
     const tokens = context.tokens ?? 0;
     const percent = Math.round(context.percent ?? (tokens / context.window) * 100);
-    // The session.start reading is 0 before any response; drop it once real readings arrive.
-    readings = readings.filter((r) => r.tokens > 0);
-    readings.push({ tokens, window: context.window, percent });
-    if (readings.length > HISTORY) {
-      readings = readings.slice(-HISTORY);
-    }
+    reading = { tokens, window: context.window, percent };
     live = null;
     $.ui.invalidate("ui.render");
   } catch {
@@ -126,23 +126,18 @@ async function takeLiveReading($, usage) {
   }
 }
 
-function band(Box, Text, columns) {
-  const now = live ?? readings[readings.length - 1];
+function band(Box, Text) {
+  const now = live ?? reading;
   const f = forecastFor(now.tokens / now.window);
-  const trend = trendWord();
-  const parts = [
-    Text({ ...colored(f), bold: true, children: `${f.icon}  ${f.word}` }),
-    Text({ children: `  ${now.percent}% of context` }),
-    Text({ dimColor: true, children: `  ${short(now.tokens)} / ${short(now.window)}` }),
-  ];
-  if (columns >= 60) {
-    parts.push(Text({ dimColor: true, children: "   last turns " }));
-    parts.push(Text({ ...colored(f), children: chart() }));
-    if (trend) {
-      parts.push(Text({ dimColor: true, children: `  ${trend}` }));
-    }
-  }
-  return Box({ flexDirection: "row", paddingX: 1, children: parts });
+  return Box({
+    flexDirection: "row",
+    paddingX: 1,
+    children: [
+      Text({ ...colored(f), bold: true, children: `${f.icon}  ${f.word}` }),
+      Text({ children: `  ${now.percent}% of context` }),
+      Text({ dimColor: true, children: `  ${short(now.tokens)} / ${short(now.window)}` }),
+    ],
+  });
 }
 
 function forecastFor(share) {
@@ -152,23 +147,6 @@ function forecastFor(share) {
 // The color prop, left out for a band drawn in the plain text color.
 function colored(f) {
   return f.color ? { color: f.color } : {};
-}
-
-// Bars scale to STOP of each reading's window, so a full bar is the stop
-// reached and a light session stays low.
-function chart() {
-  const bars = readings.map((r) => BARS[Math.min(BARS.length - 1, Math.floor((r.tokens / (r.window * STOP)) * (BARS.length - 1)))]);
-  return bars.join("");
-}
-
-function trendWord() {
-  if (readings.length < 2) {
-    return "";
-  }
-  const delta = readings[readings.length - 1].tokens - readings[readings.length - 2].tokens;
-  if (delta > 0) return `▲ +${short(delta)} last turn`;
-  if (delta < 0) return `▼ ${short(-delta)} last turn`;
-  return "steady";
 }
 
 function short(n) {

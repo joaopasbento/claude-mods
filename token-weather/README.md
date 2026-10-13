@@ -1,21 +1,19 @@
-<!-- Modified by joaopasbento in 2026 from the token-weather example in anthropics/claude-code-playground (commit 569c5283d9a0). See "Origin" below. -->
+<!-- Modified by joaopasbento in 2026 from the token-weather example in anthropics/claude-code-playground (commit 569c5283d9a0): see "Origin" below for what changed. -->
 
 # Token Weather
 
-A Claude Code mod that draws a live forecast of your context window in the band above the prompt: one hooks module that reads real usage figures and draws one line of UI.
+A Claude Code mod that draws a live forecast of your context window in the band above the prompt: one hooks module that reads real usage figures and draws one line of UI, on top of whatever the mods after it draw there.
 
 ## What it shows
 
 ```text
- ☂  Showers  72% of context  720k / 1M   last turns ▁▂▆  ▲ +560k last turn
+ ☀  Clear  7% of context  70k / 1M
 ```
 
 The band shows:
 
-- a weather icon and word for how full the window is,
-- the percentage used, and the tokens used out of the window,
-- a chart of the last 12 turns, drawn with block characters, each bar measured against 90% of the window (a full bar means the stop was reached), and
-- how much the last turn added.
+- a weather icon and word for how full the window is, and
+- the percentage used, and the tokens used out of the window.
 
 | Used      | Forecast          | Color |
 |-----------|-------------------|-------|
@@ -39,8 +37,8 @@ These are the same figures the status line shows (`total_input_tokens`, `context
 |------|--------------|
 | `session.start` | Takes a first reading, so the band shows before the first turn. |
 | `turn.complete` | Takes a reading after each main-loop turn. Subagent turns are skipped. |
-| `turn.step` | After each model request of a main-loop turn (so after each tool use too), updates the icon, percentage and tokens from that request's usage. The chart and the last-turn change still count whole turns. Subagent requests are skipped. |
-| `ui.render` with `{component: "AbovePrompt"}` | Draws the band as one line. It gives way to a survey, and hides the chart when the band is narrower than 60 columns. |
+| `turn.step` | After each model request of a main-loop turn (so after each tool use too), updates the icon, percentage and tokens from that request's usage. Subagent requests are skipped. |
+| `ui.render` with `{component: "AbovePrompt"}` | Draws the line on top of whatever the mods beneath drew in the band (`await next(e)`). Alone, the line is the whole band. It gives way to a survey. |
 
 ## Install
 
@@ -67,11 +65,11 @@ claude plugin test ./token-weather
 ## Notes and limitations
 
 - **The percentage is of the full window.** Claude Code's own "context used" notice counts against the auto-compact point, which is lower, so the two can differ.
-- **The band's state updates during a turn**, after each model request of the main loop; the chart and the last-turn change update once per turn.
-- **The chart's bars are absolute**: each measures its turn against 90% of the window, so a full bar means the stop was reached, and a light session (160k of 1M) stays low.
-- **The history resets** when the session starts, or when the plugin reloads.
+- **The line updates during a turn**, after each model request of the main loop, and again when the turn ends.
+- **The reading resets** when the session starts, or when the plugin reloads.
 - **On a 1M-token window**, ordinary work stays at ☀ for a long time. That's accurate.
-- **One band per session.** Another plugin that draws `AbovePrompt` competes for the same band.
+- **The band is shared.** Claude Code has one band above the prompt for every mod, and each mod's hook runs before those of the mods after it. Token Weather passes the band on (`await next(e)`) and puts its line on top of what it gets back, so the mods after it (Claude Code's bundled mods, such as you-should-know, always come after the ones you install) draw under the line. A mod that runs before Token Weather and puts its own drawing on top, as [savvy-progress](../savvy-progress/README.md) does with its bar (it lists token-weather as a dependency, which places it first), sits above the line. A mod that draws without passing the band on hides what the mods after it would draw.
+- **A band taller than its room shows its top.** When the mods' drawings together pass the band's rows (`maxRows`), Claude Code shows the top of the band and an `↓ n more` row. The line is near the top, so it stays in view and only what is drawn under it is cut.
 - **Before the first response**, the band reads 0%, because no response has reported usage yet.
 
 ## Dependencies
@@ -84,8 +82,9 @@ This mod started from the `token-weather` example in [anthropics/claude-code-pla
 
 - **Updates mid-response.** A `turn.step` hook updates the icon, percentage and tokens after each model request of the main loop, from that request's own usage. The example only updated at session start and at the end of each turn.
 - **New limits and colors.** Clear under 50%, Cloudy 50–69%, Showers 70–79%, Storm 80–89%, Compact soon from 90%, compared on the exact share of the window. Colors are Claude Code theme keys (`success`, `warning`, `error`), the plain text color for Cloudy, and a fixed orange for Storm. The example used fixed ANSI colors and limits at 25/50/75/90% of the rounded percentage.
-- **Absolute chart.** Each bar measures against 90% of the window. The example scaled the bars to the fullest turn shown.
-- **Fixed props.** The mod reads `hasSurvey` and `bodyColumns` from `e.props`, where Claude Code puts them. The example read them from the event itself, so the band never gave way to surveys and the chart never hid in narrow windows.
+- **No chart and no last-turn change.** The line keeps the icon, the forecast word, the percentage and the tokens. The example also drew a chart of the last turns and how much the last turn added.
+- **A shared band.** The mod passes the band on and puts its line on top of what the mods beneath drew. The example drew its line in place of anything else.
+- **Fixed props.** The mod reads `hasSurvey` from `e.props`, where Claude Code puts it. The example read it from the event itself, so the band never gave way to surveys.
 - **Tests.** `tests/token-weather.test.ts` is new and runs under `claude plugin test`.
 - **Packaging.** A new author and marketplace, this README rewritten, and the example's screenshots removed, since they showed the old colors.
 
