@@ -374,3 +374,61 @@ describe("each agent type dressed by the table", () => {
     }
   });
 });
+
+describe("calls the schema does not accept are refused", () => {
+  test('progress with "completed": refused, the hint names "done", the bar unchanged', async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await progress($, { title: "Visual das faturas", total: 8, phase: "delegate" });
+    const before = await band($, "terminal");
+    const result = await progress($, { title: "Visual das faturas", total: 8, completed: "2", phase: "delegate" });
+    expect(result.deny).toBe(
+      'Unknown field "completed". Use "done" (integer): the number of parts finished. Nothing was changed; call progress again with the right fields.',
+    );
+    expect(result.result).toBeUndefined();
+    const after = await band($, "terminal");
+    expect(after.texts).toEqual(before.texts);
+    expect(after.texts).toContain("Tasks 0/8");
+  });
+
+  test("progress with a value the schema does not take: refused", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await progress($, { title: "Tidy the docs", total: 4, phase: "delegate" });
+    for (const [input, words] of [
+      [{ done: "2" }, 'Field "done" must be an integer of at least 0; got a string: "2".'],
+      [{ done: -1 }, 'Field "done" must be an integer of at least 0; got an integer: -1.'],
+      [{ phase: "doing" }, 'Field "phase" must be one of "plan", "design", "delegate", "review", "close"; got a string: "doing".'],
+      [{ tasks: [{ title: "part 1" }] }, 'Missing field "tasks[0].tier" (string).'],
+    ] as const) {
+      const result = await progress($, input);
+      expect(result.deny, JSON.stringify(input)).toBe(`${words} Nothing was changed; call progress again with the right fields.`);
+    }
+    expect((await band($, "terminal")).texts).toContain("Tasks 0/4");
+  });
+
+  test("a right progress call is taken as before", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await progress($, { title: "Tidy the docs", total: 4, phase: "delegate" });
+    const result = await progress($, { done: 2 });
+    expect(result.deny).toBeUndefined();
+    expect(result.result).toBe("ok: Tasks 2/4");
+    expect((await band($, "terminal")).texts).toContain("Tasks 2/4");
+  });
+
+  test("step with a field too many: refused, the worker's row unchanged", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await $.agent.spawn({ tool_use_id: "t1", prompt: "work", description: "part 1", subagentType: "general-purpose", parentModel: "claude-opus-5-5" });
+    const ok = await $.tool.call({ tool: "mcp__savvy-progress__step", agentId: "agent-t1", done: 1, total: 4 });
+    expect(ok.result).toBe("ok");
+    const result = await $.tool.call({ tool: "mcp__savvy-progress__step", agentId: "agent-t1", done: 2, total: 4, completed: 2 });
+    expect(result.deny).toBe(
+      'Unknown field "completed". Use "done" (integer): the steps finished so far. Nothing was changed; call step again with the right fields.',
+    );
+    const tree = await pane($, "terminal");
+    expect(JSON.stringify(tree)).toContain("1/4");
+    expect(JSON.stringify(tree)).not.toContain("2/4");
+  });
+});

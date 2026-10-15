@@ -1,4 +1,4 @@
-<!-- Modified by joaopasbento in 2026: a copy of savvy-progress 1.2.0 by johnnyvizz (MIT), from github.com/JohnnyVizz/claude-kit at commit 272a877, changed in 1.2.1 and 1.2.2. -->
+<!-- Modified by joaopasbento in 2026: a copy of savvy-progress 1.2.0 by johnnyvizz (MIT), from github.com/JohnnyVizz/claude-kit at commit 272a877, changed in 1.2.1, 1.2.2 and 1.2.3. -->
 
 # savvy-progress
 
@@ -13,6 +13,10 @@
 >
 > - **The bar lines up with token-weather's line.** The title starts where the forecast word does under it: in the terminal after the dot and two spaces (column 3), in the app at x=19 inside the SVG, with the bar after it. The dot stays where it was.
 > - **Every agent type is dressed.** The panel picks each agent's costume and color by its exact type, from one table (`AGENT_LOOKS` in `hooks/register.tsx`): general-purpose the engineer, Explore the pirate, Plan the chef, claude-code-guide the detective, claude the astronaut, fork the racer. Any other type, or one a plugin prefixes, keeps the plain crab. savvy-flow's workers and planned tasks are dressed by their tier, as before, and the bar's crab stays plain. In the terminal, the type's ▣ and name take its color.
+>
+> And in 1.2.3:
+>
+> - **Wrong calls are refused.** The `progress` and `step` tools refuse a call with an argument their input schema does not list, or a value it does not accept, instead of answering "ok" and leaving the bar where it was. The refusal names the field and the right one, as in `Unknown field "completed". Use "done" (integer): the number of parts finished.`, so the model corrects itself on the next try; a refused call changes neither the bar nor the panel. Right calls work as before.
 >
 > The savvy-flow skill this mod was made for is not part of this marketplace.
 

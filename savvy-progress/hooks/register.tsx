@@ -633,6 +633,168 @@ async function autoOpen($: EngineInterface, key: string): Promise<void> {
 const above = (Box: ElementTable['Box'], bar: RenderElement, below: RenderElement): RenderElement =>
   below.type === 'engine' ? bar : <Box flexDirection="column">{bar}{below}</Box>
 
+// ---------------------------------------------------------------------------
+// The tools' arguments: one schema each, sent to the model as the tool's
+// inputSchema and held against every call, so a call the schema does not
+// accept is refused with words the model can act on, never taken as "ok".
+
+type Schema = {
+  type: 'object' | 'array' | 'string' | 'integer' | 'boolean'
+  description?: string
+  minimum?: number
+  enum?: readonly string[]
+  properties?: Record<string, Schema>
+  required?: readonly string[]
+  items?: Schema
+}
+
+const PROGRESS_SCHEMA = {
+  type: 'object',
+  properties: {
+    title: { type: 'string', description: 'Short name of the overall task, a few words.' },
+    total: { type: 'integer', minimum: 0, description: 'Number of planned parts (with /savvy-flow, worker tasks).' },
+    done: { type: 'integer', minimum: 0, description: 'Number of parts finished (with /savvy-flow, tasks accepted after review).' },
+    phase: { type: 'string', enum: [...PHASES] },
+    finished: { type: 'boolean', description: 'True once the work is done (the flow is closed).' },
+    tasks: {
+      type: 'array',
+      description:
+        'For delegated work (/savvy-flow): the planned worker tasks in order, numbered from 1. Each title must equal the Agent tool `description` the task will be delegated with, so the panel can match runs to tasks. Opens the agents panel.',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'A few words; reused verbatim as the Agent description.' },
+          tier: { type: 'string', enum: ['fable', 'heavy', 'careful', 'medium', 'light'] },
+          after: { type: 'array', items: { type: 'integer' }, description: 'Numbers of the tasks this one waits for.' },
+        },
+        required: ['title', 'tier'],
+      },
+    },
+  },
+} as const satisfies Schema
+
+const STEP_SCHEMA = {
+  type: 'object',
+  properties: {
+    done: { type: 'integer', minimum: 0, description: 'Steps finished so far.' },
+    total: { type: 'integer', minimum: 1, description: 'Steps planned; may change if the plan changes.' },
+    note: { type: 'string', description: 'The step in progress, a few words.' },
+  },
+  required: ['done'],
+} as const satisfies Schema
+
+// What each argument means, for the refusal's "Use ..." hint.
+const PROGRESS_HINTS: Record<string, string> = {
+  title: 'a short name of the overall task',
+  total: 'the number of planned parts',
+  done: 'the number of parts finished',
+  phase: `one of ${PHASES.join(', ')}`,
+  finished: 'true once the work is done',
+  tasks: 'the planned worker tasks (opens the agents panel)',
+}
+
+const STEP_HINTS: Record<string, string> = {
+  done: 'the steps finished so far',
+  total: 'the steps planned',
+  note: 'the step in progress, a few words',
+}
+
+// Names a model reaches for instead of the real ones.
+const PROGRESS_ALIASES: Record<string, string> = {
+  completed: 'done', complete: 'done', accepted: 'done', current: 'done', progress: 'done', count: 'done',
+  name: 'title', label: 'title', parts: 'total', of: 'total', planned: 'total',
+  status: 'phase', stage: 'phase', state: 'phase', closed: 'finished', isFinished: 'finished', plan: 'tasks',
+}
+
+const STEP_ALIASES: Record<string, string> = {
+  completed: 'done', complete: 'done', current: 'done', progress: 'done', count: 'done',
+  steps: 'total', of: 'total', planned: 'total', message: 'note', text: 'note', status: 'note', description: 'note',
+}
+
+// The tool.call event's own keys, beside the arguments (ToolCallReserved,
+// AgentLoop, ToolRequestMeta in the engine's types): never the tool's.
+const ENVELOPE = new Set(['tool', 'tool_use_id', 'consent', 'agentId', 'requestMeta'])
+
+const typeName = (v: unknown): string =>
+  v === null ? 'null' : Array.isArray(v) ? 'an array' : typeof v === 'number' && Number.isInteger(v) ? 'an integer' : `a ${typeof v}`
+
+const describe = (schema: Schema): string =>
+  schema.enum
+    ? `one of ${schema.enum.map(x => `"${x}"`).join(', ')}`
+    : schema.type === 'integer'
+      ? `an integer${schema.minimum !== undefined ? ` of at least ${schema.minimum}` : ''}`
+      : schema.type === 'array'
+        ? 'an array'
+        : schema.type === 'object'
+          ? 'an object'
+          : `a ${schema.type}`
+
+const accepts = (schema: Schema, v: unknown): boolean => {
+  if (schema.type === 'integer' && !(typeof v === 'number' && Number.isInteger(v))) return false
+  if (schema.type === 'string' && typeof v !== 'string') return false
+  if (schema.type === 'boolean' && typeof v !== 'boolean') return false
+  if (schema.type === 'array' && !Array.isArray(v)) return false
+  if (schema.type === 'object' && (typeof v !== 'object' || v === null || Array.isArray(v))) return false
+  if (schema.minimum !== undefined && typeof v === 'number' && v < schema.minimum) return false
+  if (schema.enum && !schema.enum.includes(v as string)) return false
+  return true
+}
+
+const show = (v: unknown): string => {
+  const text = JSON.stringify(v) ?? String(v)
+  return text.length > 40 ? text.slice(0, 39) + '…' : text
+}
+
+// The first thing the schema does not accept, as words for the model; undefined when it all fits.
+const refusal = (
+  value: unknown,
+  schema: Schema,
+  path: string,
+  hints: Record<string, string> = {},
+  aliases: Record<string, string> = {},
+  skip: ReadonlySet<string> = new Set(),
+): string | undefined => {
+  if (!accepts(schema, value)) {
+    return `${path ? `Field "${path}"` : 'The value'} must be ${describe(schema)}; got ${typeName(value)}: ${show(value)}.`
+  }
+  if (schema.type === 'array' && schema.items) {
+    const list = value as unknown[]
+    for (let i = 0; i < list.length; i++) {
+      const wrong = refusal(list[i], schema.items, `${path}[${i}]`)
+      if (wrong) return wrong
+    }
+  }
+  if (schema.type === 'object' && schema.properties) {
+    const props = schema.properties
+    const record = value as Record<string, unknown>
+    for (const key of Object.keys(record)) {
+      if (skip.has(key) || key in props) continue
+      const field = path ? `${path}.${key}` : key
+      const real = aliases[key]
+      const fit = real !== undefined ? props[real] : undefined
+      if (real !== undefined && fit) {
+        return `Unknown field "${field}". Use "${real}" (${fit.type})${hints[real] ? `: ${hints[real]}` : ''}.`
+      }
+      return `Unknown field "${field}". The fields are: ${Object.entries(props)
+        .map(([k, p]) => `"${k}" (${p.type})`)
+        .join(', ')}.`
+    }
+    for (const key of schema.required ?? []) {
+      if (record[key] === undefined) {
+        const field = path ? `${path}.${key}` : key
+        const need = props[key]
+        return `Missing field "${field}"${need ? ` (${need.type})` : ''}${hints[key] ? `: ${hints[key]}` : ''}.`
+      }
+    }
+    for (const [key, sub] of Object.entries(props)) {
+      if (record[key] === undefined) continue
+      const wrong = refusal(record[key], sub, path ? `${path}.${key}` : key)
+      if (wrong) return wrong
+    }
+  }
+  return undefined
+}
+
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -646,30 +808,7 @@ export const register: Register = (on, options) => {
         'With /savvy-flow, call it after presenting the plan (title, total, tasks, phase "delegate") and count a task as done once it is accepted after review. ' +
         'Passing tasks also opens the agents panel; leave them out to show the bar alone. ' +
         'Fields left out keep their previous value. A request of a single part needs no progress.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          title: { type: 'string', description: 'Short name of the overall task, a few words.' },
-          total: { type: 'integer', minimum: 0, description: 'Number of planned parts (with /savvy-flow, worker tasks).' },
-          done: { type: 'integer', minimum: 0, description: 'Number of parts finished (with /savvy-flow, tasks accepted after review).' },
-          phase: { type: 'string', enum: [...PHASES] },
-          finished: { type: 'boolean', description: 'True once the work is done (the flow is closed).' },
-          tasks: {
-            type: 'array',
-            description:
-              'For delegated work (/savvy-flow): the planned worker tasks in order, numbered from 1. Each title must equal the Agent tool `description` the task will be delegated with, so the panel can match runs to tasks. Opens the agents panel.',
-            items: {
-              type: 'object',
-              properties: {
-                title: { type: 'string', description: 'A few words; reused verbatim as the Agent description.' },
-                tier: { type: 'string', enum: ['fable', 'heavy', 'careful', 'medium', 'light'] },
-                after: { type: 'array', items: { type: 'integer' }, description: 'Numbers of the tasks this one waits for.' },
-              },
-              required: ['title', 'tier'],
-            },
-          },
-        },
-      },
+      inputSchema: PROGRESS_SCHEMA,
     })
     await $.tool.register({
       name: 'step',
@@ -677,15 +816,7 @@ export const register: Register = (on, options) => {
         'For savvy-flow workers: report progress on your own task to the agents panel. ' +
         'Right after reading the brief, call it with `total` (your plan in 3-8 steps) and `done: 0`; ' +
         'call it again as each step finishes. Cheap and silent: it only draws a bar.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          done: { type: 'integer', minimum: 0, description: 'Steps finished so far.' },
-          total: { type: 'integer', minimum: 1, description: 'Steps planned; may change if the plan changes.' },
-          note: { type: 'string', description: 'The step in progress, a few words.' },
-        },
-        required: ['done'],
-      },
+      inputSchema: STEP_SCHEMA,
     })
     await $.command.register({
       name: 'agents-info',
@@ -710,6 +841,9 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: TOOL }, async ($, e) => {
+    // Refused before anything changes: the bar and the panel stay as they were.
+    const wrong = refusal(e, PROGRESS_SCHEMA, '', PROGRESS_HINTS, PROGRESS_ALIASES, ENVELOPE)
+    if (wrong) return { deny: `${wrong} Nothing was changed; call progress again with the right fields.` }
     const input = e as unknown as ProgressInput
     const prev = await read($, flow)
     if (isNewFlow(prev, input) && input.title !== undefined) {
@@ -723,6 +857,8 @@ export const register: Register = (on, options) => {
 
   // A worker's own progress: the call runs in the worker's loop, so agentId names it.
   on('tool.call', { tool: STEP_TOOL }, async ($, e) => {
+    const wrong = refusal(e, STEP_SCHEMA, '', STEP_HINTS, STEP_ALIASES, ENVELOPE)
+    if (wrong) return { deny: `${wrong} Nothing was changed; call step again with the right fields.` }
     const input = e as unknown as { done?: number; total?: number; note?: string }
     const agentId = e.agentId
     if (!agentId) return { result: 'ignored: only subagents report steps' }

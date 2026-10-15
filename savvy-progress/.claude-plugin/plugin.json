@@ -1,6 +1,6 @@
 {
   "name": "savvy-progress",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Progress bar above the prompt for any work in several parts, /savvy-flow included, plus an agents panel (/agents-info): running, finished and planned subagents with model, task progress, context, tokens and time.",
   "author": {
     "name": "johnnyvizz",
