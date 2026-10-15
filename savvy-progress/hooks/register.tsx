@@ -635,8 +635,10 @@ const above = (Box: ElementTable['Box'], bar: RenderElement, below: RenderElemen
 
 // ---------------------------------------------------------------------------
 // The tools' arguments: one schema each, sent to the model as the tool's
-// inputSchema and held against every call, so a call the schema does not
-// accept is refused with words the model can act on, never taken as "ok".
+// inputSchema and held against every call: a known slip of a field's name, a
+// value the schema does not take, a required field left out or a call with
+// none of the tool's fields is refused with words the model can act on, never
+// taken as "ok". Other unknown keys are let through: they may be the event's.
 
 type Schema = {
   type: 'object' | 'array' | 'string' | 'integer' | 'boolean'
@@ -711,10 +713,6 @@ const STEP_ALIASES: Record<string, string> = {
   steps: 'total', of: 'total', planned: 'total', message: 'note', text: 'note', status: 'note', description: 'note',
 }
 
-// The tool.call event's own keys, beside the arguments (ToolCallReserved,
-// AgentLoop, ToolRequestMeta in the engine's types): never the tool's.
-const ENVELOPE = new Set(['tool', 'tool_use_id', 'consent', 'agentId', 'requestMeta'])
-
 const typeName = (v: unknown): string =>
   v === null ? 'null' : Array.isArray(v) ? 'an array' : typeof v === 'number' && Number.isInteger(v) ? 'an integer' : `a ${typeof v}`
 
@@ -752,7 +750,6 @@ const refusal = (
   path: string,
   hints: Record<string, string> = {},
   aliases: Record<string, string> = {},
-  skip: ReadonlySet<string> = new Set(),
 ): string | undefined => {
   if (!accepts(schema, value)) {
     return `${path ? `Field "${path}"` : 'The value'} must be ${describe(schema)}; got ${typeName(value)}: ${show(value)}.`
@@ -767,15 +764,22 @@ const refusal = (
   if (schema.type === 'object' && schema.properties) {
     const props = schema.properties
     const record = value as Record<string, unknown>
+    // An unknown key is refused only when it is a known slip for a real field
+    // ("completed" for "done"); any other is let through, since the tool.call
+    // event carries keys of its own beside the arguments, and a newer Claude
+    // Code may add more.
     for (const key of Object.keys(record)) {
-      if (skip.has(key) || key in props) continue
-      const field = path ? `${path}.${key}` : key
+      if (key in props) continue
       const real = aliases[key]
       const fit = real !== undefined ? props[real] : undefined
       if (real !== undefined && fit) {
+        const field = path ? `${path}.${key}` : key
         return `Unknown field "${field}". Use "${real}" (${fit.type})${hints[real] ? `: ${hints[real]}` : ''}.`
       }
-      return `Unknown field "${field}". The fields are: ${Object.entries(props)
+    }
+    // A call with none of the tool's own fields would change nothing.
+    if (!path && !Object.keys(props).some(key => record[key] !== undefined)) {
+      return `No field of the tool was given. The fields are: ${Object.entries(props)
         .map(([k, p]) => `"${k}" (${p.type})`)
         .join(', ')}.`
     }
@@ -842,7 +846,7 @@ export const register: Register = (on, options) => {
 
   on('tool.call', { tool: TOOL }, async ($, e) => {
     // Refused before anything changes: the bar and the panel stay as they were.
-    const wrong = refusal(e, PROGRESS_SCHEMA, '', PROGRESS_HINTS, PROGRESS_ALIASES, ENVELOPE)
+    const wrong = refusal(e, PROGRESS_SCHEMA, '', PROGRESS_HINTS, PROGRESS_ALIASES)
     if (wrong) return { deny: `${wrong} Nothing was changed; call progress again with the right fields.` }
     const input = e as unknown as ProgressInput
     const prev = await read($, flow)
@@ -857,7 +861,7 @@ export const register: Register = (on, options) => {
 
   // A worker's own progress: the call runs in the worker's loop, so agentId names it.
   on('tool.call', { tool: STEP_TOOL }, async ($, e) => {
-    const wrong = refusal(e, STEP_SCHEMA, '', STEP_HINTS, STEP_ALIASES, ENVELOPE)
+    const wrong = refusal(e, STEP_SCHEMA, '', STEP_HINTS, STEP_ALIASES)
     if (wrong) return { deny: `${wrong} Nothing was changed; call step again with the right fields.` }
     const input = e as unknown as { done?: number; total?: number; note?: string }
     const agentId = e.agentId

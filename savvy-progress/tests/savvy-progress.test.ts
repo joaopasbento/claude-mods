@@ -432,3 +432,37 @@ describe("calls the schema does not accept are refused", () => {
     expect(JSON.stringify(tree)).not.toContain("2/4");
   });
 });
+
+describe("unknown keys that are not known slips are let through", () => {
+  test('a right call with a key the tool does not know ("turnId", as a new event field): taken, the bar moves', async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await progress($, { title: "Tidy the docs", total: 4, phase: "delegate" });
+    const result = await progress($, { done: 3, turnId: "t-42" });
+    expect(result.deny).toBeUndefined();
+    expect(result.result).toBe("ok: Tasks 3/4");
+    expect((await band($, "terminal")).texts).toContain("Tasks 3/4");
+  });
+
+  test("a call with only an unknown key that is not a slip: refused, with the fields", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await progress($, { title: "Tidy the docs", total: 4, phase: "delegate" });
+    const result = await progress($, { turnId: "t-42" });
+    expect(result.deny).toBe(
+      'No field of the tool was given. The fields are: "title" (string), "total" (integer), "done" (integer), "phase" (string), "finished" (boolean), "tasks" (array). Nothing was changed; call progress again with the right fields.',
+    );
+    expect((await band($, "terminal")).texts).toContain("Tasks 0/4");
+  });
+
+  test('"completed" is still refused, with the same words', async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await progress($, { title: "Tidy the docs", total: 4, phase: "delegate" });
+    const result = await progress($, { completed: 2, turnId: "t-42" });
+    expect(result.deny).toBe(
+      'Unknown field "completed". Use "done" (integer): the number of parts finished. Nothing was changed; call progress again with the right fields.',
+    );
+    expect((await band($, "terminal")).texts).toContain("Tasks 0/4");
+  });
+});

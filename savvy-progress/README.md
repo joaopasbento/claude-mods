@@ -1,4 +1,4 @@
-<!-- Modified by joaopasbento in 2026: a copy of savvy-progress 1.2.0 by johnnyvizz (MIT), from github.com/JohnnyVizz/claude-kit at commit 272a877, changed in 1.2.1, 1.2.2 and 1.2.3. -->
+<!-- Modified by joaopasbento in 2026: a copy of savvy-progress 1.2.0 by johnnyvizz (MIT), from github.com/JohnnyVizz/claude-kit at commit 272a877, changed in 1.2.1, 1.2.2, 1.2.3 and 1.2.4. -->
 
 # savvy-progress
 
@@ -17,6 +17,10 @@
 > And in 1.2.3:
 >
 > - **Wrong calls are refused.** The `progress` and `step` tools refuse a call with an argument their input schema does not list, or a value it does not accept, instead of answering "ok" and leaving the bar where it was. The refusal names the field and the right one, as in `Unknown field "completed". Use "done" (integer): the number of parts finished.`, so the model corrects itself on the next try; a refused call changes neither the bar nor the panel. Right calls work as before.
+>
+> And in 1.2.4:
+>
+> - **Only known slips are refused.** An unknown argument makes the call fail only when it is a known slip for a real field, such as `completed` for `done`. Any other unknown key is let through, as up to 1.2.2: the `tool.call` event carries keys of its own beside the arguments, and a newer Claude Code may add more, which 1.2.3 would have refused on every call. Values the schema does not take and missing required fields are still refused, and so is a call with none of the tool's fields, which would change nothing; its refusal lists the fields.
 >
 > The savvy-flow skill this mod was made for is not part of this marketplace.
 
