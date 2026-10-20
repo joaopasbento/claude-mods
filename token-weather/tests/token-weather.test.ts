@@ -4,8 +4,10 @@
 // `turn.complete` as the engine's own steps, and `ui.render` as whatever is
 // drawn beneath the mod in the band: the engine's own drawing (`{ type:
 // "engine" }`, what a real session hands on when nobody beneath draws) or
-// another mod's tree. So each test walks the band through turns, through
-// model requests inside a turn, and beside other mods.
+// another mod's tree. It also answers `session.model` and `config.list` (the
+// fast row) as a session would. So each test walks the band through turns,
+// through model requests inside a turn, model switches, and beside other
+// mods.
 
 import { describe, expect, test } from "claude-code/testing";
 
@@ -17,6 +19,12 @@ const ORANGE = "#cc5a14";
 // the event that reads it. The engine's own percent is rounded, as the
 // status line's is.
 let tokens = 0;
+
+// What `$.session.model()` answers ("" names none) and the fast row of
+// `$.config.list()` (undefined: no row, as without fast mode on the account).
+let sessionModel = "";
+let fastRow: boolean | undefined = undefined;
+const FAST_ON = "#e0600a";
 
 // The engine's own drawing of the band, as `next(e)` resolves to it when no
 // plugin beneath draws: a real session answers this shape (ref 1).
@@ -35,7 +43,20 @@ function engine($: any, on: any, stepUsage: object | null = null, beneath: (Box:
     const { Box, Text } = $.ui.resolve(e);
     return beneath(Box, Text);
   });
+  on("session.model", () => ({ value: sessionModel }));
+  on("config.list", () => ({
+    value: fastRow === undefined ? [] : [{ key: "fast", label: "Fast mode (Opus 5.5)", kind: "boolean", value: fastRow, provider: { plugin: "engine", tier: "core" }, isLocked: false }],
+  }));
+  on("config.set", (_$: any, e: any) => {
+    if (e.key === "fast") fastRow = e.value;
+    return { value: e.value };
+  });
   on("session.start", (_$: any, e: any) => ({ cwd: e.cwd }));
+  on("turn.start", (_$: any, e: any) => ({ turnId: e.turnId }));
+  on("prompt.attachment", (_$: any, e: any) => ({ text: e.text }));
+  on("classic.SessionStart", () => ({}));
+  on("classic.PostModelSwitch", () => ({}));
+  on("classic.ConfigChange", () => ({}));
   on("turn.complete", (_$: any, e: any) => ({ text: e.answer }));
   on("turn.step", async function* (_$: any, e: any) {
     return { turnId: e.turnId, index: e.index, answer: "", toolUses: [], stopReason: null, usage: stepUsage };
@@ -43,8 +64,10 @@ function engine($: any, on: any, stepUsage: object | null = null, beneath: (Box:
   return $;
 }
 
-async function start($: any) {
+async function start($: any, model = "", fast?: boolean) {
   tokens = 0;
+  sessionModel = model;
+  fastRow = fast;
   await $.session.start({ cwd: "/", surface: "terminal", isInteractive: true });
 }
 
@@ -89,9 +112,22 @@ async function forecast($: any) {
   return { label: elements[0] };
 }
 
-// The token-weather line as the mod draws it: one row Box of three Texts.
-function isLine(node: any) {
+// The context part of the line: one row Box of three Texts.
+function isContext(node: any) {
   return node?.type === "Box" && node.props?.flexDirection === "row" && node.children?.length === 3 && node.children.every((c: any) => c.type === "Text");
+}
+
+// The token-weather line as the mod draws it: a row Box that wraps, the
+// context part first, then, when there is one, the session's part.
+function isLine(node: any) {
+  return node?.type === "Box" && node.props?.flexDirection === "row" && node.props?.flexWrap === "wrap" && isContext(node.children?.[0]) && node.children.length <= 2;
+}
+
+// The texts of the line's context part alone.
+async function contextTexts($: any) {
+  const { tree } = await draw($);
+  const line = isLine(tree) ? tree : tree.children[0];
+  return line.children[0].children.map((t: any) => t.children.join(""));
 }
 
 // Both sides of each limit, by exact tokens of a 1M window, with the color
@@ -208,11 +244,13 @@ describe("alignment", () => {
     await complete($, 70_000);
     const line = (await draw($)).tree.children[0];
     expect(isLine(line)).toBe(true);
+    const context = line.children[0];
     for (const prop of ["padding", "paddingX", "paddingLeft", "margin", "marginX", "marginLeft"]) {
       expect(line.props[prop], prop).toBeUndefined();
+      expect(context.props[prop], prop).toBeUndefined();
     }
     // The first Text is the icon, two spaces and the word: the word starts in column 3.
-    expect(line.children[0].children[0].indexOf("Clear")).toBe(3);
+    expect(context.children[0].children[0].indexOf("Clear")).toBe(3);
   });
 });
 
@@ -223,13 +261,22 @@ describe("sharing the band", () => {
     await complete($, 70_000);
     const { tree, elements } = await draw($);
     expect(isLine(tree)).toBe(true);
-    expect(tree).toEqual({
+    // The engine stamps the root it gets back with `part: { plugin }` (2.1.299).
+    const { part, ...drawn } = tree;
+    expect(part).toEqual({ plugin: PLUGIN });
+    expect(drawn).toEqual({
       type: "Box",
-      props: { flexDirection: "row" },
+      props: { flexDirection: "row", flexWrap: "wrap" },
       children: [
-        { type: "Text", props: { color: "success", bold: true }, children: ["☀  Clear"] },
-        { type: "Text", children: ["  7% of context"] },
-        { type: "Text", props: { dimColor: true }, children: ["  70k / 1M"] },
+        {
+          type: "Box",
+          props: { flexDirection: "row", flexShrink: 0 },
+          children: [
+            { type: "Text", props: { color: "success", bold: true }, children: ["☀  Clear"] },
+            { type: "Text", children: ["  7% of context"] },
+            { type: "Text", props: { dimColor: true }, children: ["  70k / 1M"] },
+          ],
+        },
       ],
     });
     expect(elements.map((t: any) => t.text)).toEqual(["☀  Clear", "  7% of context", "  70k / 1M"]);
@@ -294,14 +341,14 @@ describe("mid-response, after each model request", () => {
 
     // The next turn: a request that called a tool, then the one after the tool's result.
     await step($, 600_000, 0);
-    expect(await band($)).toEqual(["☁  Cloudy", "  60% of context", "  600k / 1M"]);
+    expect(await contextTexts($)).toEqual(["☁  Cloudy", "  60% of context", "  600k / 1M"]);
 
     await step($, 750_000, 1);
-    expect(await band($)).toEqual(["☂  Showers", "  75% of context", "  750k / 1M"]);
+    expect(await contextTexts($)).toEqual(["☂  Showers", "  75% of context", "  750k / 1M"]);
 
     // The turn ends: the turn's reading takes over.
     await complete($, 760_000);
-    expect(await band($)).toEqual(["☂  Showers", "  76% of context", "  760k / 1M"]);
+    expect(await contextTexts($)).toEqual(["☂  Showers", "  76% of context", "  760k / 1M"]);
   });
 
   test("a subagent's model requests leave the band as it was", async ($: any, on: any) => {
@@ -319,7 +366,7 @@ describe("mid-response, after each model request", () => {
     await complete($, 100_000);
     // session.usage still reports the previous response.
     await step($, 100_000, 0);
-    expect(await band($)).toEqual(["☁  Cloudy", "  60% of context", "  600k / 1M"]);
+    expect(await contextTexts($)).toEqual(["☁  Cloudy", "  60% of context", "  600k / 1M"]);
   });
 
   test("before any turn, a step alone draws the band", async ($: any, on: any) => {
@@ -329,5 +376,317 @@ describe("mid-response, after each model request", () => {
     const texts = await band($);
     expect(texts).toContain("  30% of context");
     expect(texts).toContain("  300k / 1M");
+  });
+});
+
+// A main-session (or, with agentId, a subagent's) model request naming its
+// model and effort; tokens stay where the last reading left them.
+async function request($: any, fields: { model?: string; effort?: string | number; agentId?: string; index?: number } = {}) {
+  const { model = "claude-opus-5-5", index = 0, ...rest } = fields;
+  const stream = $.turn.step({ turnId: "t", index, model, messageCount: 1, ...rest });
+  for await (const _ of stream) {
+    // The test's response yields no chunks.
+  }
+  await stream.result;
+}
+
+async function switchModel($: any, to: string, agentId?: string) {
+  await $.classic.PostModelSwitch({
+    from_model: "claude-opus-5-5",
+    to_model: to,
+    requested_model: to,
+    source: "command",
+    context_tokens: 70_000,
+    prompt_cache_warm: true,
+    cache_ttl: "5m",
+    estimated_cache_write_usd: 0,
+    pricing: null,
+    ...(agentId ? { agent_id: agentId } : {}),
+  });
+}
+
+async function attachment($: any, type: string, agentId?: string) {
+  await $.prompt.attachment({ type, text: "", origin: { kind: "engine" }, ...(agentId ? { agentId } : {}) });
+}
+
+// The session's part of the line: its Box, its Text, the pieces and the words shown.
+async function sessionPart($: any, props: Props = {}) {
+  const { tree } = await draw($, props);
+  const line = isLine(tree) ? tree : tree.children[0];
+  const box = line.children[1];
+  if (!box) return { shown: "", box: undefined, text: undefined, pieces: [] as any[] };
+  const text = box.children[0];
+  const pieces: any[] = text.children;
+  return { shown: pieces.map((p: any) => p.children.join("")).join(""), box, text, pieces };
+}
+
+function piece(pieces: any[], words: string) {
+  return pieces.find((p: any) => p.children.join("") === words);
+}
+
+describe("the session's part: the model", () => {
+  test("by short name, from a request's id, with or without a suffix", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await complete($, 70_000);
+    expect((await sessionPart($)).shown).toBe("");
+    for (const [id, name] of [
+      ["claude-opus-5-5", "Opus 5.5"],
+      ["claude-opus-4-8[1m]", "Opus 4.8"],
+      ["claude-sonnet-4-5-20250929", "Sonnet 4.5"],
+      ["claude-opus-5", "Opus 5"],
+      ["claude-haiku-4-5", "Haiku 4.5"],
+    ]) {
+      await request($, { model: id });
+      expect((await sessionPart($)).shown, id).toBe(name);
+    }
+  });
+
+  test("the model that answered (usage.model) before the one asked for (e.model)", async ($: any, on: any) => {
+    engine($, on, { model: "claude-sonnet-5", input_tokens: 70_000, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
+    await start($);
+    await request($, { model: "claude-opus-5-5" });
+    expect((await sessionPart($)).shown).toBe("Sonnet 5");
+  });
+
+  test("at the start, from $.session.model() and classic.SessionStart", async ($: any, on: any) => {
+    engine($, on);
+    await start($, "claude-opus-5-5[1m]");
+    await complete($, 70_000);
+    expect((await sessionPart($)).shown).toBe("Opus 5.5");
+    await $.classic.SessionStart({ source: "startup", model: "claude-opus-4-8" });
+    expect((await sessionPart($)).shown).toBe("Opus 4.8");
+  });
+
+  test("an alias names no version: nothing until the first request", async ($: any, on: any) => {
+    engine($, on);
+    await start($, "opus");
+    await complete($, 70_000);
+    expect((await sessionPart($)).shown).toBe("");
+    await request($, { model: "claude-opus-5-5" });
+    expect((await sessionPart($)).shown).toBe("Opus 5.5");
+  });
+
+  test("an unknown value shows as it is, without claude- and its [..] suffix", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await complete($, 70_000);
+    await request($, { model: "claude-custom-model[1m]" });
+    expect((await sessionPart($)).shown).toBe("custom-model");
+    await request($, { model: "my-model" });
+    expect((await sessionPart($)).shown).toBe("my-model");
+  });
+});
+
+describe("the session's part: the effort", () => {
+  test("each level by the app's menu: xhigh shows as extra", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await complete($, 70_000);
+    for (const [effort, words] of [
+      ["low", "low"],
+      ["medium", "medium"],
+      ["high", "high"],
+      ["xhigh", "extra"],
+      ["max", "max"],
+    ]) {
+      await request($, { effort });
+      const { shown, pieces } = await sessionPart($);
+      expect(shown, effort).toBe(`Opus 5.5 · ${words}`);
+      expect(shown, effort).not.toContain("xhigh");
+      // The separator is grey.
+      expect(piece(pieces, " · ")?.props.dimColor, effort).toBe(true);
+    }
+  });
+
+  test("a number shows as a number", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await complete($, 70_000);
+    await request($, { effort: 2048 });
+    expect((await sessionPart($)).shown).toBe("Opus 5.5 · 2048");
+  });
+
+  test("no effort, no effort part: before any request, and on a model without effort", async ($: any, on: any) => {
+    engine($, on);
+    await start($, "claude-opus-5-5");
+    await complete($, 70_000);
+    expect((await sessionPart($)).shown).toBe("Opus 5.5");
+    await request($, { effort: "high" });
+    await request($, { model: "claude-haiku-4-5" });
+    expect((await sessionPart($)).shown).toBe("Haiku 4.5");
+  });
+});
+
+describe("the session's part: fast mode", () => {
+  test("on: fast on, in the orange of fast mode, on any model", async ($: any, on: any) => {
+    engine($, on);
+    await start($, "claude-opus-5-5", true);
+    await complete($, 70_000);
+    await request($, { effort: "high" });
+    const { shown, pieces } = await sessionPart($);
+    expect(shown).toBe("Opus 5.5 · high · fast on");
+    expect(piece(pieces, "fast on")?.props.color).toBe(FAST_ON);
+    expect(shown).not.toContain("↯");
+    await request($, { model: "claude-sonnet-5" });
+    expect((await sessionPart($)).shown).toBe("Sonnet 5 · fast on");
+  });
+
+  test("off on a model that has it: fast off, grey", async ($: any, on: any) => {
+    engine($, on);
+    await start($, "", false);
+    await complete($, 70_000);
+    for (const id of ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"]) {
+      await request($, { model: id });
+      const { shown, pieces } = await sessionPart($);
+      expect(shown, id).toMatch(/ · fast off$/);
+      expect(piece(pieces, "fast off")?.props.dimColor, id).toBe(true);
+    }
+  });
+
+  test("off on a model without it: nothing about fast mode", async ($: any, on: any) => {
+    engine($, on);
+    await start($, "", false);
+    await complete($, 70_000);
+    for (const id of ["claude-opus-4-7", "claude-opus-4-6", "claude-fable-5-1", "claude-sonnet-5", "claude-haiku-4-5"]) {
+      await request($, { model: id });
+      expect((await sessionPart($)).shown, id).not.toContain("fast");
+    }
+  });
+
+  test("no fast row in /config: nothing about fast mode", async ($: any, on: any) => {
+    engine($, on);
+    await start($, "claude-opus-5-5");
+    await complete($, 70_000);
+    await request($, { effort: "medium" });
+    expect((await sessionPart($)).shown).toBe("Opus 5.5 · medium");
+  });
+
+  test("read again at each main turn's start, after /config and a settings change", async ($: any, on: any) => {
+    engine($, on);
+    await start($, "claude-opus-5-5", false);
+    await complete($, 70_000);
+    expect((await sessionPart($)).shown).toBe("Opus 5.5 · fast off");
+    // A subagent's turn start reads nothing.
+    fastRow = true;
+    await $.turn.start({ text: "", turnId: "a1", agentId: "agent-1" });
+    expect((await sessionPart($)).shown).toBe("Opus 5.5 · fast off");
+    await $.turn.start({ text: "", turnId: "t2" });
+    expect((await sessionPart($)).shown).toBe("Opus 5.5 · fast on");
+    await $.config.set({ key: "fast", value: false });
+    expect((await sessionPart($)).shown).toBe("Opus 5.5 · fast off");
+    fastRow = true;
+    await $.classic.ConfigChange({ source: "user_settings" });
+    expect((await sessionPart($)).shown).toBe("Opus 5.5 · fast on");
+  });
+});
+
+describe("the session's part: ultracode", () => {
+  test("on while the engine's ultracode reminder holds, in order before fast mode", async ($: any, on: any) => {
+    engine($, on);
+    await start($, "claude-opus-5-5", false);
+    await complete($, 70_000);
+    await request($, { effort: "xhigh" });
+    await attachment($, "ultra_effort_enter");
+    expect((await sessionPart($)).shown).toBe("Opus 5.5 · extra · ultracode · fast off");
+    await attachment($, "ultra_effort_exit");
+    expect((await sessionPart($)).shown).toBe("Opus 5.5 · extra · fast off");
+  });
+
+  test("the ultracode keyword in a prompt, or a subagent's reminder, is not ultracode on", async ($: any, on: any) => {
+    engine($, on);
+    await start($, "claude-opus-5-5");
+    await complete($, 70_000);
+    await attachment($, "workflow_keyword_request");
+    await attachment($, "ultra_effort_enter", "agent-1");
+    expect((await sessionPart($)).shown).toBe("Opus 5.5");
+  });
+});
+
+describe("the session's part: a model switch", () => {
+  test("the new model; the effort cleared until the next request; fast mode read again", async ($: any, on: any) => {
+    engine($, on);
+    await start($, "claude-opus-5-5", true);
+    await complete($, 70_000);
+    await request($, { effort: "high" });
+    expect((await sessionPart($)).shown).toBe("Opus 5.5 · high · fast on");
+    // Claude Code turns fast mode off on a model without it.
+    fastRow = false;
+    await switchModel($, "claude-sonnet-5");
+    expect((await sessionPart($)).shown).toBe("Sonnet 5");
+    await request($, { model: "claude-sonnet-5", effort: "medium" });
+    expect((await sessionPart($)).shown).toBe("Sonnet 5 · medium");
+  });
+
+  test("to an alias: no model until the next request names it", async ($: any, on: any) => {
+    engine($, on);
+    await start($, "claude-sonnet-5");
+    await complete($, 70_000);
+    await switchModel($, "opus");
+    expect((await sessionPart($)).shown).toBe("");
+    await request($, { model: "claude-opus-5-5", effort: "low" });
+    expect((await sessionPart($)).shown).toBe("Opus 5.5 · low");
+  });
+
+  test("a subagent's switch leaves the line as it was", async ($: any, on: any) => {
+    engine($, on);
+    await start($, "claude-opus-5-5");
+    await complete($, 70_000);
+    await request($, { effort: "high" });
+    await switchModel($, "claude-haiku-4-5", "agent-1");
+    expect((await sessionPart($)).shown).toBe("Opus 5.5 · high");
+  });
+});
+
+describe("the session's part: subagents' requests", () => {
+  test("a subagent's model and effort leave the line as it was", async ($: any, on: any) => {
+    engine($, on);
+    await start($, "", false);
+    await complete($, 70_000);
+    await request($, { effort: "high" });
+    await request($, { model: "claude-haiku-4-5", effort: "low", agentId: "agent-1" });
+    expect((await sessionPart($)).shown).toBe("Opus 5.5 · high · fast off");
+  });
+});
+
+describe("the session's part: room", () => {
+  for (const bodyColumns of [30, 60, 120]) {
+    test(`at ${bodyColumns} columns: on the right by flex, wrapping beneath; the context whole`, async ($: any, on: any) => {
+      engine($, on);
+      await start($, "claude-opus-5-5", false);
+      await complete($, 70_000);
+      await request($, { effort: "xhigh" });
+      await attachment($, "ultra_effort_enter");
+      const { tree } = await draw($, { bodyColumns });
+      expect(isLine(tree)).toBe(true);
+      // One row that wraps: the session's part moves to a line of its own when both do not fit.
+      expect(tree.props.flexWrap).toBe("wrap");
+      expect(tree.props.columnGap).toBe(2);
+      // The context never shrinks and keeps its three texts.
+      const context = tree.children[0];
+      expect(context.props.flexShrink).toBe(0);
+      expect(context.children.map((t: any) => t.children.join(""))).toEqual(["☀  Clear", "  7% of context", "  70k / 1M"]);
+      // The session's part grows to the right edge, on either line, and is cut at its end.
+      const box = tree.children[1];
+      expect(box.props.flexGrow).toBe(1);
+      expect(box.props.justifyContent).toBe("flex-end");
+      expect(box.children[0].props.wrap).toBe("truncate-end");
+      // No spaces counted by hand: no piece leads or trails with them but the separators.
+      const pieces = box.children[0].children.map((p: any) => p.children.join(""));
+      expect(pieces).toEqual(["Opus 5.5", " · ", "extra", " · ", "ultracode", " · ", "fast off"]);
+    });
+  }
+});
+
+describe("the session's part: a survey", () => {
+  test("a survey still takes the band, with the session's part known", async ($: any, on: any) => {
+    const SURVEY = (Box: any, Text: any) => Box({ key: "survey", children: [Text({ children: "How is Claude doing?" })] });
+    engine($, on, null, SURVEY);
+    await start($, "claude-opus-5-5", true);
+    await complete($, 160_000);
+    await request($, { effort: "high" });
+    const withSurvey = await draw($, { hasSurvey: true });
+    expect(withSurvey.tree.props.key).toBe("survey");
+    expect(withSurvey.elements.map((t: any) => t.text)).toEqual(["How is Claude doing?"]);
   });
 });
