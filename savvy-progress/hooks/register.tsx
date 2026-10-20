@@ -289,7 +289,7 @@ const colorOf = (tier: string): string => TIER_COLOR[tier] ?? '#888780'
 
 const TIER_MODEL: Record<string, string> = {
   fable: 'Fable · high',
-  heavy: 'Opus · xhigh',
+  heavy: 'Opus · extra',
   careful: 'Opus · high',
   medium: 'Opus · medium',
   light: 'Opus · low',
@@ -310,6 +310,9 @@ const modelName = (id: string): string => {
   if (!family) return id.replace(/^claude-/, '').replace(/\[.*\]$/, '') || '—'
   return `${family.charAt(0).toUpperCase()}${family.slice(1).toLowerCase()} ${major}${minor ? '.' + minor : ''}`
 }
+
+// The effort as the app's effort menu names it: xhigh is "extra" there.
+const effortName = (effort: string): string => (effort === 'xhigh' ? 'extra' : effort)
 
 const norm = (s: string): string => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
 
@@ -537,7 +540,7 @@ const agentSvg = (W: number, a: AgentRun, at: number): string => {
   const color = look.color
   const ctx = ctxOf(a)
   const textW = W - 42 - 22
-  const meta = [a.effort ? `${modelName(a.model)} · ${a.effort}` : modelName(a.model)]
+  const meta = [a.effort ? `${modelName(a.model)} · ${effortName(a.effort)}` : modelName(a.model)]
   if (a.round > 1) meta.push(`${s.round} ${a.round}`)
   if (a.status === 'failed') meta.push(s.failed)
   const barW = textW
@@ -1074,7 +1077,7 @@ export const register: Register = (on, options) => {
       const color = look.color
       const ctx = ctxOf(a)
       const progress = progressOf(a)
-      const model = a.effort ? `${modelName(a.model)} · ${a.effort}` : modelName(a.model)
+      const model = a.effort ? `${modelName(a.model)} · ${effortName(a.effort)}` : modelName(a.model)
       const steps = a.stepTotal ? `${a.stepDone ?? 0}/${a.stepTotal}${a.stepNote ? ' ' + a.stepNote : ''} · ` : ''
       return (
         <Box key={a.id} flexDirection="column" marginBottom={1}>

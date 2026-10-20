@@ -466,3 +466,43 @@ describe("unknown keys that are not known slips are let through", () => {
     expect((await band($, "terminal")).texts).toContain("Tasks 0/4");
   });
 });
+
+describe("effort with the names of the app's effort menu", () => {
+  async function run($: any, effort: string) {
+    await $.agent.spawn({ tool_use_id: "t1", prompt: "work", description: "part 1", subagentType: "general-purpose", parentModel: "claude-opus-5-5" });
+    const stream = $.turn.step({ turnId: "t1", index: 0, model: "claude-opus-5-5", effort, messageCount: 1, agentId: "agent-t1" });
+    for await (const _ of stream) {
+      // The test's response yields no chunks.
+    }
+    await stream.result;
+  }
+
+  for (const surface of ["terminal", "desktop"] as const) {
+    test(`${surface}: xhigh shows as extra, the other levels as they are`, async ($: any, on: any) => {
+      engine($, on);
+      await start($);
+      await run($, "xhigh");
+      const all = shown(await pane($, surface)).join("\n");
+      expect(all).toContain("Opus 5.5 · extra");
+      expect(all).not.toContain("xhigh");
+    });
+
+    test(`${surface}: high stays high`, async ($: any, on: any) => {
+      engine($, on);
+      await start($);
+      await run($, "high");
+      expect(shown(await pane($, surface)).join("\n")).toContain("Opus 5.5 · high");
+    });
+  }
+
+  test("a planned heavy task shows Opus · extra", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await progress($, { title: "Tidy the docs", total: 1, phase: "delegate", tasks: [{ title: "part 9", tier: "heavy" }] });
+    for (const surface of ["terminal", "desktop"] as const) {
+      const all = shown(await pane($, surface)).join("\n");
+      expect(all, surface).toContain("Opus · extra");
+      expect(all, surface).not.toContain("xhigh");
+    }
+  });
+});

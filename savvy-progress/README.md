@@ -1,4 +1,4 @@
-<!-- Modified by joaopasbento in 2026: a copy of savvy-progress 1.2.0 by johnnyvizz (MIT), from github.com/JohnnyVizz/claude-kit at commit 272a877, changed in 1.2.1, 1.2.2, 1.2.3 and 1.2.4. -->
+<!-- Modified by joaopasbento in 2026: a copy of savvy-progress 1.2.0 by johnnyvizz (MIT), from github.com/JohnnyVizz/claude-kit at commit 272a877, changed in 1.2.1, 1.2.2, 1.2.3, 1.2.4 and 1.2.5. -->
 
 # savvy-progress
 
@@ -21,6 +21,10 @@
 > And in 1.2.4:
 >
 > - **Only known slips are refused.** An unknown argument makes the call fail only when it is a known slip for a real field, such as `completed` for `done`. Any other unknown key is let through, as up to 1.2.2: the `tool.call` event carries keys of its own beside the arguments, and a newer Claude Code may add more, which 1.2.3 would have refused on every call. Values the schema does not take and missing required fields are still refused, and so is a call with none of the tool's fields, which would change nothing; its refusal lists the fields.
+>
+> And in 1.2.5:
+>
+> - **Effort uses the app's names.** The agents panel shows each agent's effort with the names of the app's effort menu, on the desktop and in the terminal: `xhigh` shows as `extra`, and low, medium, high and max stay as they are. The planned heavy tier reads `Opus · extra`.
 >
 > The savvy-flow skill this mod was made for is not part of this marketplace.
 
