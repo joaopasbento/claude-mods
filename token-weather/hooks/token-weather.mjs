@@ -5,11 +5,11 @@
 // anthropics/claude-code-playground (commit 569c5283d9a0): updates mid-response,
 // new limits and colors, props read from e.props, the chart and the last-turn
 // change removed, the band shared with the mods drawn beneath, the line
-// drawn from the band's left edge, and the session's model, effort, ultracode
-// and fast mode on the right of the line.
+// drawn from the band's left edge, and the session's model, effort and
+// ultracode after the tokens.
 //
 // Token Weather: a live forecast of the context window, above the prompt, and
-// the main session's model, effort, ultracode and fast mode beside it.
+// the main session's model, effort and ultracode beside it.
 //
 // turn.complete: after each main-loop turn, read the context window's fill
 // from $.session.usage() (the same figures the status line shows).
@@ -24,15 +24,13 @@
 // classic.SessionStart: the model the session starts on, when it says one.
 // classic.PostModelSwitch: the new model (to_model); the effort is cleared
 // until the next request says it again.
-// turn.start, classic.PostModelSwitch, classic.ConfigChange and config.set
-// (the fast row): read fast mode from the fast row of $.config.list(), which
-// holds the session's state and exists only when fast mode is available.
 // prompt.attachment: ultracode is on while the engine's ultra_effort_enter
 // reminder is the last it sent, off after ultra_effort_exit.
 // Subagents' turns, requests and events (agentId, agent_id) are left out.
 // ui.render (AbovePrompt): one line: icon, forecast word, percent, and tokens
-// used of the window on the left; model, effort, ultracode and fast mode on
-// the right, or on a second line, also on the right, when both do not fit.
+// used of the window, then, after a grey " · ", model, effort and ultracode;
+// when they do not fit beside the tokens, they go on the line beneath, from
+// the forecast word's column, with no " · " before them.
 // The band is one for every mod: the line goes on top of whatever the hooks
 // beneath drew (await next(e)), so when the band is taller than its rows and
 // shows its top, the line stays in view; alone, it is the whole band, as
@@ -59,15 +57,16 @@ const FORECAST = [
   { upTo: Infinity, icon: "↯", word: "Compact soon", color: "error" },
 ];
 
-// The models that have fast mode: the entries of Claude Code's model catalog
-// with the fast_mode capability, by short name, as of Claude Code 2.1.299.
-// "fast off" shows only on these; "fast on" shows on any model, since Claude
-// Code turns fast mode off on a model without it.
-const FAST_MODELS = new Set(["Opus 5.5", "Opus 5", "Opus 4.8"]);
+// Whether the session's part fits beside the tokens: the line's characters,
+// times ROOM_SCALE, plus ROOM_SLACK columns, within the band's bodyColumns.
+// The terminal draws a character per column; the app draws the band in a
+// proportional font whose letters and symbols can run wider than its column
+// metric, so the margin keeps the line from breaking there on its own.
+const ROOM_SCALE = 1.25;
+const ROOM_SLACK = 2;
 
-// "fast on": no theme key a mod is sure to have is Claude Code's own fast-mode
-// orange, so it is one fixed tone near it that reads on light and dark.
-const FAST_ON = "#e0600a";
+// The column the forecast word starts in: the icon and two spaces.
+const WORD_COLUMN = 3;
 
 // Model aliases, which name no version: the model waits for a request's id.
 const ALIASES = /^(fable|mythos|opus|sonnet|haiku|best|default|opusplan)$/i;
@@ -86,8 +85,6 @@ let model = null;
 let effort = undefined;
 // Ultracode in effect for the session.
 let ultracode = false;
-// The fast row's value; undefined when /config has no fast row.
-let fast = undefined;
 
 export function register(on) {
   on("session.start", async ($, e, next) => {
@@ -97,10 +94,8 @@ export function register(on) {
     model = null;
     effort = undefined;
     ultracode = false;
-    fast = undefined;
     await takeReading($);
     await readModel($);
-    await readFast($);
     return result;
   });
 
@@ -110,14 +105,6 @@ export function register(on) {
       setShown($, () => {
         model = shortModel(e.model) ?? model;
       });
-    }
-    return result;
-  });
-
-  on("turn.start", async ($, e, next) => {
-    const result = await next(e);
-    if (e.agentId === undefined) {
-      await readFast($);
     }
     return result;
   });
@@ -151,20 +138,7 @@ export function register(on) {
         model = shortModel(e.to_model);
         effort = undefined;
       });
-      await readFast($);
     }
-    return result;
-  });
-
-  on("classic.ConfigChange", async ($, e, next) => {
-    const result = await next(e);
-    await readFast($);
-    return result;
-  });
-
-  on("config.set", { key: "fast" }, async ($, e, next) => {
-    const result = await next(e);
-    await readFast($);
     return result;
   });
 
@@ -196,7 +170,7 @@ export function register(on) {
     }
     const below = await next(e);
     const { Box, Text } = $.ui.resolve(e);
-    const line = band(Box, Text);
+    const line = band(Box, Text, e.props.bodyColumns);
     // Nobody beneath drew: the engine's own band, empty without a survey.
     if (!below || below.type === "engine") {
       return line;
@@ -213,18 +187,6 @@ async function readModel($) {
     });
   } catch {
     // No model yet; the first request will name it.
-  }
-}
-
-async function readFast($) {
-  try {
-    const rows = await $.config.list();
-    const row = rows.find((r) => r.key === "fast");
-    setShown($, () => {
-      fast = row && typeof row.value === "boolean" ? row.value : undefined;
-    });
-  } catch {
-    // No reading; the line keeps what it showed.
   }
 }
 
@@ -274,52 +236,55 @@ async function takeLiveReading($, usage) {
   }
 }
 
-function band(Box, Text) {
+function band(Box, Text, columns) {
   const now = live ?? reading;
   const f = forecastFor(now.tokens / now.window);
+  const words = [`${f.icon}  ${f.word}`, `  ${now.percent}% of context`, `  ${short(now.tokens)} / ${short(now.window)}`];
   // No left padding: the line starts at the band's left edge, as the bar of
   // savvy-progress above it does, so their icons and words line up.
   const context = Box({
     flexDirection: "row",
     flexShrink: 0,
     children: [
-      Text({ ...colored(f), bold: true, children: `${f.icon}  ${f.word}` }),
-      Text({ children: `  ${now.percent}% of context` }),
-      Text({ dimColor: true, children: `  ${short(now.tokens)} / ${short(now.window)}` }),
+      Text({ ...colored(f), bold: true, children: words[0] }),
+      Text({ children: words[1] }),
+      Text({ dimColor: true, children: words[2] }),
     ],
   });
   const parts = sessionParts();
   if (!parts.length) {
-    return Box({ flexDirection: "row", flexWrap: "wrap", children: [context] });
+    return Box({ flexDirection: "row", children: [context] });
   }
-  // The session's part: on the right, at least two columns from the context.
-  // When both do not fit, the row wraps and it takes a line of its own, still
-  // on the right; alone too long, it is cut at its end.
+  // The session's part: model, effort and ultracode, with grey " · " between.
   const children = [];
   for (const part of parts) {
     if (children.length) {
       children.push(Text({ dimColor: true, children: " · " }));
     }
-    children.push(part === "fast on" ? Text({ color: FAST_ON, children: part }) : part === "fast off" ? Text({ dimColor: true, children: part }) : Text({ children: part }));
+    children.push(Text({ children: part }));
   }
-  const session = Box({
-    flexGrow: 1,
-    flexShrink: 1,
-    justifyContent: "flex-end",
-    children: [Text({ wrap: "truncate-end", children })],
-  });
-  return Box({ flexDirection: "row", flexWrap: "wrap", columnGap: 2, children: [context, session] });
+  const session = Text({ wrap: "truncate-end", children });
+  const lead = "  ·  ";
+  if (fits([...words, lead, parts.join(" · ")].join(""), columns)) {
+    return Box({ flexDirection: "row", children: [context, Text({ dimColor: true, children: lead }), session] });
+  }
+  // Too wide for one line: the session's part goes beneath, from the forecast
+  // word's column, with no " · " before it; the context stays whole.
+  return Box({ flexDirection: "column", children: [context, Box({ paddingLeft: WORD_COLUMN, children: [session] })] });
 }
 
-// Model, effort, ultracode and fast mode, in that order, each left out when
-// there is nothing to say.
+// Whether text fits in the band's columns, with the app's margin.
+function fits(text, columns) {
+  return typeof columns === "number" && Math.ceil([...text].length * ROOM_SCALE) + ROOM_SLACK <= columns;
+}
+
+// Model, effort and ultracode, in that order, each left out when there is
+// nothing to say.
 function sessionParts() {
   const parts = [];
   if (model) parts.push(model);
   if (effort !== undefined && effort !== null) parts.push(effortName(effort));
   if (ultracode) parts.push("ultracode");
-  if (fast === true) parts.push("fast on");
-  else if (fast === false && model && FAST_MODELS.has(model)) parts.push("fast off");
   return parts;
 }
 

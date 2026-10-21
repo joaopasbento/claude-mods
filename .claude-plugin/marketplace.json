@@ -10,7 +10,7 @@
     {
       "name": "token-weather",
       "source": "./token-weather",
-      "description": "A live forecast of the context window, drawn above the prompt, with the session's model, effort, ultracode and fast mode."
+      "description": "A live forecast of the context window, drawn above the prompt, with the session's model, effort and ultracode."
     },
     {
       "name": "savvy-progress",
