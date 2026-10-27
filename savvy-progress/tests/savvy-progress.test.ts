@@ -506,3 +506,90 @@ describe("effort with the names of the app's effort menu", () => {
     }
   });
 });
+
+describe("the bar on its own while subagents run", () => {
+  async function spawn($: any, n: number, type = "general-purpose") {
+    await $.agent.spawn({ tool_use_id: `t${n}`, prompt: "work", description: `part ${n}`, subagentType: type, parentModel: "claude-opus-5-5" });
+  }
+
+  async function finish($: any, n: number) {
+    await $.turn.complete({ answer: "done", durationMs: 1, isAborted: false, turnId: `t${n}`, reason: "answer", agentId: `agent-t${n}` });
+  }
+
+  for (const surface of ["terminal", "desktop"] as const) {
+    test(`${surface}: one subagent of any type shows the bar, with no progress call; it leaves when none runs`, async ($: any, on: any) => {
+      engine($, on);
+      await start($);
+      expect((await band($, surface)).tree).toEqual(ENGINE);
+
+      await spawn($, 1, "Explore");
+      const { tree } = await band($, surface);
+      expect(isBar(tree), surface).toBe(true);
+      const all = shown(tree).join("\n");
+      expect(all, surface).toContain("Agents");
+      expect(all, surface).toContain("1 running");
+      expect(all, surface).toContain('×1');
+      // It leaves by itself: no dismiss.
+      expect(JSON.stringify(tree), surface).not.toContain('"savvy-dismiss"');
+
+      await finish($, 1);
+      expect((await band($, surface)).tree, surface).toEqual(ENGINE);
+    });
+  }
+
+  test("terminal: the wave's agents finished out of started, the running ones counted", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await spawn($, 1);
+    await spawn($, 2, "Plan");
+    await finish($, 1);
+    const { texts } = await band($, "terminal");
+    expect(texts).toContain("Agents");
+    expect(texts).toContain("1 running");
+    expect(texts).toContain("50%");
+  });
+
+  test("a new wave after a pause counts only its own agents", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await spawn($, 1);
+    await finish($, 1);
+    await spawn($, 2);
+    const { texts } = await band($, "terminal");
+    expect(texts).toContain("1 running");
+    expect(texts).toContain("0%");
+    await spawn($, 3);
+    await finish($, 2);
+    expect((await band($, "terminal")).texts).toContain("50%");
+  });
+
+  test("over another mod's drawing, the bar goes on top", async ($: any, on: any) => {
+    engine($, on, (Box: any, Text: any) => Box({ key: "other", children: [Text({ children: "  7% of context" })] }));
+    await start($);
+    await spawn($, 1);
+    const { tree } = await band($, "terminal");
+    expect(tree.children).toHaveLength(2);
+    expect(isBar(tree.children[0])).toBe(true);
+    expect(tree.children[1].props.key).toBe("other");
+  });
+
+  test("a survey still takes the band", async ($: any, on: any) => {
+    engine($, on, (Box: any, Text: any) => Box({ key: "survey", children: [Text({ children: "How is Claude doing?" })] }));
+    await start($);
+    await spawn($, 1);
+    const { tree } = await band($, "terminal", { hasSurvey: true });
+    expect(tree.props.key).toBe("survey");
+  });
+
+  test("a reported flow keeps its own bar, dismiss and all", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    await spawn($, 1);
+    await progress($, { title: "Tidy the docs", total: 4, phase: "delegate" });
+    const { tree, texts } = await band($, "terminal");
+    expect(texts).toContain("Tidy the docs");
+    expect(texts).toContain("Tasks 0/4");
+    expect(texts).not.toContain("1 running");
+    expect(JSON.stringify(tree)).toContain('"savvy-dismiss"');
+  });
+});

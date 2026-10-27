@@ -1,4 +1,4 @@
-<!-- Modified by joaopasbento in 2026: a copy of savvy-progress 1.2.0 by johnnyvizz (MIT), from github.com/JohnnyVizz/claude-kit at commit 272a877, changed in 1.2.1, 1.2.2, 1.2.3, 1.2.4 and 1.2.5. -->
+<!-- Modified by joaopasbento in 2026: a copy of savvy-progress 1.2.0 by johnnyvizz (MIT), from github.com/JohnnyVizz/claude-kit at commit 272a877, changed in 1.2.1, 1.2.2, 1.2.3, 1.2.4, 1.2.5 and 1.2.6. -->
 
 # savvy-progress
 
@@ -26,11 +26,15 @@
 >
 > - **Effort uses the app's names.** The agents panel shows each agent's effort with the names of the app's effort menu, on the desktop and in the terminal: `xhigh` shows as `extra`, and low, medium, high and max stay as they are. The planned heavy tier reads `Opus · extra`.
 >
+> And in 1.2.6:
+>
+> - **The bar shows by itself while subagents run.** As soon as at least one subagent of any type runs (Explore, general-purpose, Plan or any other), the bar appears, with no progress call: the title "Agents", how many are running, the wave's agents finished out of started, and the crew button that opens the panel. It has no dismiss and leaves by itself when none runs. A wave is every run that overlapped the stretch since none was running. Work that reports progress (`progress`, savvy-flow) keeps its own bar, as before.
+>
 > The savvy-flow skill this mod was made for is not part of this marketplace.
 
 A Claude Code mod: a progress bar above the prompt and a live panel of subagents. Made for the [savvy-flow](https://github.com/JohnnyVizz/claude-kit/tree/272a877/plugins/savvy-flow) skill, and useful with any subagents.
 
-- **Progress bar**: the flow's title, phase, accepted tasks out of planned, and a button with the crew size that opens the panel. It appears once something reports progress (savvy-flow does) or a `savvy-*` worker starts.
+- **Progress bar**: the flow's title, phase, accepted tasks out of planned, and a button with the crew size that opens the panel. It appears once something reports progress (savvy-flow does) or a `savvy-*` worker starts, and by itself, under the title "Agents", while at least one subagent of any type runs; that one leaves when none runs.
 - **Agents panel** (`/agents-info` toggles it): running, finished and planned subagents with model, effort, task progress, context, tokens and time. Working crabs walk, and each costume animates its prop: the astronaut floats, the detective sweeps the magnifier, the engineer turns the wrench, the chef tosses the omelette, the racer runs with a fluttering flag. `prefers-reduced-motion` stops them.
 
 ## Tools it adds

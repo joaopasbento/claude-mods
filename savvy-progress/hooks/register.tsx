@@ -151,6 +151,7 @@ const merge = (prev: Flow | null, input: ProgressInput): Flow => {
 
 const label = (f: Flow): string => {
   const s = tr()
+  if (f.isAuto) return `${f.running} ${s.busy}`
   if (f.isFinished) return s.done
   if (f.phase === 'plan') return s.plan
   if (f.phase === 'design') return s.design
@@ -629,6 +630,35 @@ async function autoOpen($: EngineInterface, key: string): Promise<void> {
   if (p.autoOpenedFor === key) return
   await update($, panel, prev => ({ ...prev, autoOpenedFor: key }))
   void $.ui.open({ id: PANE, title: tr().pane })
+}
+
+// The bar while subagents run and nothing reported progress: the agents of
+// this wave (every run that overlapped the stretch since none was running),
+// finished out of started, under the panel's own title. Null when none runs:
+// the bar leaves.
+const autoFlow = (list: AgentRun[]): Flow | null => {
+  const running = list.filter(a => a.status === 'running')
+  if (!running.length) return null
+  let since = Math.min(...running.map(a => a.startedAt))
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const a of list) {
+      if (a.startedAt < since && (a.endedAt ?? Infinity) >= since) {
+        since = a.startedAt
+        grew = true
+      }
+    }
+  }
+  const wave = list.filter(a => a.startedAt >= since)
+  return {
+    ...blank(),
+    title: tr().pane,
+    total: wave.length,
+    done: wave.length - running.length,
+    running: running.length,
+    phase: 'delegate',
+    isAuto: true,
+  }
 }
 
 // The bar on top of what the band's hooks beneath drew; alone when nobody
@@ -1174,21 +1204,25 @@ export const register: Register = (on, options) => {
   // whatever the hooks beneath drew (`next(e)`), never in its place. The
   // manifest lists token-weather as a dependency, so this hook runs before
   // its own and the bar sits above the context line.
+  // With no flow reported, the bar still shows on its own while at least one
+  // subagent of any type runs, and leaves when none does.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const f = await read($, flow)
-    if (f === null || e.props.hasSurvey) return next(e)
+    if (e.props.hasSurvey) return next(e)
+    const list = await read($, agents)
+    const f = (await read($, flow)) ?? autoFlow(list)
+    if (f === null) return next(e)
 
     const below = await next(e)
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
-    const list = await read($, agents)
     const crew = list.length + plannedOf(f, list).length
     const isWorking = list.some(a => a.status === 'running')
     const crewButton = (
       <Button key="savvy-agents" label={`×${crew}`} plain onPress={() => void togglePane($)} />
     )
     const percent = `${Math.round(ratio(f) * 100)}%`
-    const dismiss = (
+    // The bar of running agents leaves by itself: no dismiss.
+    const dismiss = f.isAuto ? null : (
       <Button
         key="savvy-dismiss"
         label="✕"

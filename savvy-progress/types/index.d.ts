@@ -14,6 +14,8 @@ export type Flow = {
   phase: Phase
   isFinished: boolean
   tasks: PlannedTask[]
+  /** Drawn on its own while subagents run and nothing reported progress. */
+  isAuto?: boolean
 }
 
 export type AgentStatus = 'running' | 'done' | 'failed'
