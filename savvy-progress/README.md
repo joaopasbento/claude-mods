@@ -1,4 +1,4 @@
-<!-- Modified by joaopasbento in 2026: a copy of savvy-progress 1.2.0 by johnnyvizz (MIT), from github.com/JohnnyVizz/claude-kit at commit 272a877, changed in 1.2.1, 1.2.2, 1.2.3, 1.2.4, 1.2.5 and 1.2.6. -->
+<!-- Modified by joaopasbento in 2026: a copy of savvy-progress 1.2.0 by johnnyvizz (MIT), from github.com/JohnnyVizz/claude-kit at commit 272a877, changed in 1.2.1, 1.2.2, 1.2.3, 1.2.4, 1.2.5, 1.2.6 and 1.2.7. -->
 
 # savvy-progress
 
@@ -29,6 +29,10 @@
 > And in 1.2.6:
 >
 > - **The bar shows by itself while subagents run.** As soon as at least one subagent of any type runs (Explore, general-purpose, Plan or any other), the bar appears, with no progress call: the title "Agents", how many are running, the wave's agents finished out of started, and the crew button that opens the panel. It has no dismiss and leaves by itself when none runs. A wave is every run that overlapped the stretch since none was running. Work that reports progress (`progress`, savvy-flow) keeps its own bar, as before.
+>
+> And in 1.2.7:
+>
+> - **No task list unless the panel is asked for.** The `progress` tool's description now tells the model not to pass `tasks` unless the user asks for the agents panel, so the panel does not open by itself.
 >
 > The savvy-flow skill this mod was made for is not part of this marketplace.
 

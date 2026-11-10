@@ -843,7 +843,7 @@ export const register: Register = (on, options) => {
         'any multi-part task, /savvy-flow included. Call it when the work starts (title, total, phase "delegate"), ' +
         'each time a part is finished (done), when switching phase or re-planning, and once at the end with finished: true. ' +
         'With /savvy-flow, call it after presenting the plan (title, total, tasks, phase "delegate") and count a task as done once it is accepted after review. ' +
-        'Passing tasks also opens the agents panel; leave them out to show the bar alone. ' +
+        'Passing tasks also opens the agents panel; do not pass them unless the user asks for the agents panel. ' +
         'Fields left out keep their previous value. A request of a single part needs no progress.',
       inputSchema: PROGRESS_SCHEMA,
     })

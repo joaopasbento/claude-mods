@@ -15,11 +15,13 @@ const BAND = { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 120 
 
 // What the engine beneath was asked for: the commands registered and the panes opened.
 let commands: any[] = [];
+let tools: any[] = [];
 let panes: string[] = [];
 let clock = 0;
 
 function engine($: any, on: any, beneath: (Box: any, Text: any) => object = () => ENGINE) {
   commands = [];
+  tools = [];
   panes = [];
   clock = 1_000;
   on("session.start", (_$: any, e: any) => ({ cwd: e.cwd }));
@@ -27,7 +29,10 @@ function engine($: any, on: any, beneath: (Box: any, Text: any) => object = () =
   on("settings.read", () => ({ value: {} }));
   on("clock.now", () => ({ value: (clock += 1_000) }));
   on("clock.every", () => ({ value: undefined }));
-  on("tool.register", (_$: any, e: any) => ({ value: { tool: `mcp__${PLUGIN}__${e.name}` } }));
+  on("tool.register", (_$: any, e: any) => {
+    tools.push(e);
+    return { value: { tool: `mcp__${PLUGIN}__${e.name}` } };
+  });
   on("command.register", (_$: any, e: any) => {
     commands.push(e);
     return { value: { command: e.name } };
@@ -591,5 +596,15 @@ describe("the bar on its own while subagents run", () => {
     expect(texts).toContain("Tasks 0/4");
     expect(texts).not.toContain("1 running");
     expect(JSON.stringify(tree)).toContain('"savvy-dismiss"');
+  });
+});
+
+describe("the progress tool's description", () => {
+  test("says not to pass tasks unless the user asks for the agents panel", async ($: any, on: any) => {
+    engine($, on);
+    await start($);
+    const tool = tools.find((t: any) => t.name === "progress");
+    expect(tool.description).toContain("do not pass them unless the user asks for the agents panel");
+    expect(tool.description).not.toContain("leave them out");
   });
 });
