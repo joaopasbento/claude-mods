@@ -174,8 +174,8 @@ const H = 22
 const BAR_H = 16
 const CRAB_W = 26
 const CELL = 3
-// The title starts where token-weather's forecast word does under it: after
-// its icon (about 12 px) and two spaces (about 7 px).
+// The title starts after room for an icon (about 12 px) and two spaces
+// (about 7 px).
 const TITLE_X = 19
 const FONT = "-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif"
 
@@ -1201,9 +1201,7 @@ export const register: Register = (on, options) => {
   })
 
   // The band above the prompt is one for every mod: the bar goes on top of
-  // whatever the hooks beneath drew (`next(e)`), never in its place. The
-  // manifest lists token-weather as a dependency, so this hook runs before
-  // its own and the bar sits above the context line.
+  // whatever the hooks beneath drew (`next(e)`), never in its place.
   // With no flow reported, the bar still shows on its own while at least one
   // subagent of any type runs, and leaves when none does.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -1249,8 +1247,7 @@ export const register: Register = (on, options) => {
     }
 
     const cols = e.props.bodyColumns
-    // "●" and two spaces, so the title starts in column 3, where the forecast
-    // word of token-weather's line (icon, two spaces, word) starts under it.
+    // "●" and two spaces, so the title starts in column 3.
     const titleW = Math.max(9, Math.min(31, f.title.length + 3, Math.floor(cols / 3) + 1))
     const width = Math.max(6, Math.min(40, cols - titleW - 32))
     return above(

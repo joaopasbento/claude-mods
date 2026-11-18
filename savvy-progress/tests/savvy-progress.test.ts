@@ -236,7 +236,7 @@ function findNode(node: any, test: (n: any) => boolean): any {
   return undefined;
 }
 
-describe("alignment with token-weather's line", () => {
+describe("title alignment", () => {
   test("terminal: the title starts in column 3, after the dot and two spaces", async ($: any, on: any) => {
     engine($, on);
     await start($);
